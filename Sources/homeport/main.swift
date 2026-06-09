@@ -58,6 +58,8 @@ func run(_ arguments: [String]) throws {
         try update(Array(arguments.dropFirst()))
     case "start":
         try start(Array(arguments.dropFirst()))
+    case "restart":
+        try restart(Array(arguments.dropFirst()))
     case "autostart":
         try autostart(Array(arguments.dropFirst()))
     case "configure":
@@ -367,6 +369,12 @@ func start(_ arguments: [String]) throws {
     }
     try runProcess("open", [appPath.path])
     print("Started Codex Homeport: \(appPath.path)")
+}
+
+func restart(_ arguments: [String]) throws {
+    try runProcess("pkill", ["-f", "Codex Homeport.app/Contents/MacOS/Codex Homeport"], allowFailure: true)
+    Thread.sleep(forTimeInterval: 0.5)
+    try start(arguments)
 }
 
 func autostart(_ arguments: [String]) throws {
@@ -727,6 +735,7 @@ func printHelp(topic: String? = nil) {
     case "install": print(installHelp())
     case "update": print(updateHelp())
     case "start": print(startHelp())
+    case "restart": print(restartHelp())
     case "autostart": print(autostartHelp())
     case "configure": print(configureHelp())
     case "onboard": print(onboardHelp())
@@ -761,6 +770,7 @@ Setup commands:
   install      Build and install the CLI, optionally the menu bar app
   update       Pull latest source and reinstall
   start        Open the installed menu bar app
+  restart      Quit and reopen the installed menu bar app
   configure    Change terminal, workspace, or autostart preferences
   autostart    Enable, disable, or show LaunchAgent status
   uninstall    Remove the app/autostart entry; extra removals are opt-in
@@ -1044,6 +1054,20 @@ Usage:
 Examples:
   homeport start
   homeport start --app-dir ~/Applications
+""" }
+
+func restartHelp() -> String { """
+homeport restart
+
+Quit any running Codex Homeport menu bar process and reopen the installed app.
+Use this after reinstalling so macOS does not keep an older menu bar build alive.
+
+Usage:
+  homeport restart [--app-dir PATH]
+
+Examples:
+  homeport restart
+  homeport restart --app-dir ~/Applications
 """ }
 
 func autostartHelp() -> String { """
