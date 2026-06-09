@@ -32,7 +32,17 @@ jobs:
         run: swift test
       - name: Check package
         run: npm pack --dry-run
+      - name: Check npm version
+        id: npm-version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if npm view "codex-homeport@$VERSION" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish npm
+        if: steps.npm-version.outputs.published != 'true'
         run: npm publish --access public --provenance
       - name: Create GitHub release
         env:
