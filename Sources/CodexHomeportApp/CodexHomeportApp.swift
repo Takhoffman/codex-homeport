@@ -243,7 +243,6 @@ final class HomeportModel: ObservableObject {
 struct HomeportMenuView: View {
     @EnvironmentObject var model: HomeportModel
     @Environment(\.openWindow) private var openWindow
-    @State private var showingOptions = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -265,23 +264,25 @@ struct HomeportMenuView: View {
                 .buttonStyle(.borderless)
             }
 
-            PrimaryLaunchButton(
-                title: primaryTitle,
-                subtitle: primarySubtitle,
-                symbol: primarySymbol
+            FormSection(
+                title: "1. Open Codex Now",
+                help: "Use your remembered defaults, or pick the other common launch."
             ) {
-                model.launchPreferred()
-            }
+                PrimaryLaunchButton(
+                    title: primaryTitle,
+                    subtitle: primarySubtitle,
+                    symbol: primarySymbol
+                ) {
+                    model.launchPreferred()
+                }
 
-            HStack(spacing: 8) {
-                SecondaryLaunchButton(title: alternateTargetTitle, symbol: alternateTargetSymbol) {
-                    model.launch("main", target: alternateTarget)
-                }
-                SecondaryLaunchButton(title: "Throwaway", symbol: "timer") {
-                    model.launch("temp", target: .desktop)
-                }
-                SecondaryLaunchButton(title: "Console", symbol: "sidebar.left") {
-                    openWindow(id: "console")
+                VStack(spacing: 6) {
+                    PlainActionButton(title: alternateTargetTitle, subtitle: alternateTargetSubtitle, symbol: alternateTargetSymbol) {
+                        model.launch("main", target: alternateTarget)
+                    }
+                    PlainActionButton(title: "Open a temporary Codex app", subtitle: "Uses a disposable home; you can review cleanup later", symbol: "timer") {
+                        model.launch("temp", target: .desktop)
+                    }
                 }
             }
 
@@ -291,24 +292,30 @@ struct HomeportMenuView: View {
 
             Divider()
 
-            DisclosureGroup(isExpanded: $showingOptions) {
+            FormSection(
+                title: "2. Remember These Defaults",
+                help: "These settings control the big blue button and new copied homes."
+            ) {
                 QuickOptions()
-                    .padding(.top, 6)
-            } label: {
-                Label("Options", systemImage: "slider.horizontal.3")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
             }
 
             Divider()
 
-            CreateHomeSection()
+            FormSection(
+                title: "3. Make a New Home",
+                help: "A home is a separate Codex state folder. Main is left alone."
+            ) {
+                CreateHomeSection()
+            }
 
             if model.report.globalCodexHome != nil || !model.report.suspiciousLaunchers.isEmpty {
                 DiagnosticBanner()
             }
 
             HStack {
+                Button("Open Console") {
+                    openWindow(id: "console")
+                }
                 Spacer()
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)
@@ -339,11 +346,36 @@ struct HomeportMenuView: View {
     }
 
     private var alternateTargetTitle: String {
-        alternateTarget == .desktop ? "Desktop" : "Terminal"
+        alternateTarget == .desktop ? "Open Main in the desktop app" : "Open Main in Terminal"
+    }
+
+    private var alternateTargetSubtitle: String {
+        alternateTarget == .desktop ? "Same main home, but in Codex.app" : "Same main home, but in a terminal window"
     }
 
     private var alternateTargetSymbol: String {
         alternateTarget == .desktop ? "macwindow" : "terminal"
+    }
+}
+
+struct FormSection<Content: View>: View {
+    var title: String
+    var help: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(help)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            content
+        }
     }
 }
 
@@ -416,7 +448,7 @@ struct CompactLaunchRow: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
                         .font(.caption.weight(.semibold))
-                        .lineLimit(1)
+                        .lineLimit(2)
                     Text(subtitle)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -480,38 +512,62 @@ struct SecondaryLaunchButton: View {
     }
 }
 
+struct PlainActionButton: View {
+    var title: String
+    var subtitle: String
+    var symbol: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(2)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+}
+
 struct CreateHomeSection: View {
     @EnvironmentObject var model: HomeportModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Create A New Codex Home")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
+        VStack(alignment: .leading, spacing: 6) {
             CreateHomeButton(
-                title: "Copy My Setup",
-                subtitle: "New home with the selected options from this Codex",
+                title: "Make a saved copy of my current setup",
+                subtitle: "Copies the checked items below into a new home",
                 symbol: "square.on.square"
             ) {
                 model.cloneWorkingSetup()
             }
 
-            HStack(spacing: 8) {
-                CreateHomeButton(
-                    title: "Start Fresh",
-                    subtitle: "Empty saved home",
-                    symbol: "sparkles"
-                ) {
-                    model.cleanRoom()
-                }
-                CreateHomeButton(
-                    title: "Temporary Test",
-                    subtitle: "Throwaway home",
-                    symbol: "timer"
-                ) {
-                    model.createTemporaryHome()
-                }
+            CreateHomeButton(
+                title: "Make a saved empty home",
+                subtitle: "Starts fresh and stays in your list",
+                symbol: "sparkles"
+            ) {
+                model.cleanRoom()
+            }
+
+            CreateHomeButton(
+                title: "Make a temporary test home",
+                subtitle: "Starts fresh and is meant to be cleaned up later",
+                symbol: "timer"
+            ) {
+                model.createTemporaryHome()
             }
         }
     }
@@ -602,30 +658,36 @@ struct QuickOptions: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Remembered Options")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            Picker("Default", selection: Binding(
-                get: { model.state.preferences.defaultLaunchTarget },
-                set: { model.setDefaultLaunchTarget($0) }
-            )) {
-                Text("Desktop").tag(LaunchTarget.desktop)
-                Text("Terminal").tag(LaunchTarget.terminal)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("When I press the big blue button, open:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("Default", selection: Binding(
+                    get: { model.state.preferences.defaultLaunchTarget },
+                    set: { model.setDefaultLaunchTarget($0) }
+                )) {
+                    Text("Desktop App").tag(LaunchTarget.desktop)
+                    Text("Terminal").tag(LaunchTarget.terminal)
+                }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
 
             Toggle("Prefer temporary launches", isOn: Binding(
                 get: { model.state.preferences.launchTemporaryByDefault },
                 set: { model.setLaunchTemporaryByDefault($0) }
             ))
 
-            Picker("Clone", selection: Binding(
-                get: { model.state.preferences.defaultClonePreset },
-                set: { model.setDefaultClonePreset($0) }
-            )) {
-                ForEach(ClonePreset.allCases, id: \.self) { preset in
-                    Text(preset.displayName).tag(preset)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("When I copy my setup, start from:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("Clone", selection: Binding(
+                    get: { model.state.preferences.defaultClonePreset },
+                    set: { model.setDefaultClonePreset($0) }
+                )) {
+                    ForEach(ClonePreset.allCases, id: \.self) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
                 }
             }
 
@@ -643,7 +705,7 @@ struct CloneIncludeToggles: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Clone Includes")
+            Text("Checked items will be copied into a saved copy:")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             HStack(spacing: 6) {
