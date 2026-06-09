@@ -302,17 +302,7 @@ struct HomeportMenuView: View {
 
             Divider()
 
-            HStack {
-                Button("Clone Setup") {
-                    model.cloneWorkingSetup()
-                }
-                Button("Clean Room") {
-                    model.cleanRoom()
-                }
-                Button("Temp Home") {
-                    model.createTemporaryHome()
-                }
-            }
+            CreateHomeSection()
 
             if model.report.globalCodexHome != nil || !model.report.suspiciousLaunchers.isEmpty {
                 DiagnosticBanner()
@@ -487,6 +477,73 @@ struct SecondaryLaunchButton: View {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
+    }
+}
+
+struct CreateHomeSection: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Create A New Codex Home")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            CreateHomeButton(
+                title: "Copy My Setup",
+                subtitle: "New home with the selected options from this Codex",
+                symbol: "square.on.square"
+            ) {
+                model.cloneWorkingSetup()
+            }
+
+            HStack(spacing: 8) {
+                CreateHomeButton(
+                    title: "Start Fresh",
+                    subtitle: "Empty saved home",
+                    symbol: "sparkles"
+                ) {
+                    model.cleanRoom()
+                }
+                CreateHomeButton(
+                    title: "Temporary Test",
+                    subtitle: "Throwaway home",
+                    symbol: "timer"
+                ) {
+                    model.createTemporaryHome()
+                }
+            }
+        }
+    }
+}
+
+struct CreateHomeButton: View {
+    var title: String
+    var subtitle: String
+    var symbol: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: symbol)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("\(title): \(subtitle)")
     }
 }
 
