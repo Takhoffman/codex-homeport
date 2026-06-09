@@ -30,6 +30,10 @@ public struct HomeportPaths: Sendable {
         appSupportDirectory.appendingPathComponent("homeport.json")
     }
 
+    public var updateLogFile: URL {
+        appSupportDirectory.appendingPathComponent("update.log")
+    }
+
     public var codexAppExecutable: URL {
         URL(fileURLWithPath: "/Applications/Codex.app/Contents/MacOS/Codex")
     }

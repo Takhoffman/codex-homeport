@@ -493,6 +493,36 @@ func configure(_ arguments: [String]) throws {
         print("Install app by default: \(state.preferences.installAppByDefault)")
     }
 
+    if let updateChecks = option(arguments, "--update-checks") {
+        var state = try service.loadState()
+        state.preferences.autoUpdateChecksEnabled = try strictBoolValue(updateChecks, optionName: "--update-checks")
+        if !state.preferences.autoUpdateChecksEnabled {
+            state.preferences.autoInstallUpdates = false
+        }
+        try service.saveState(state)
+        print("Update checks enabled: \(state.preferences.autoUpdateChecksEnabled)")
+    }
+
+    if let updateInterval = option(arguments, "--update-interval") {
+        guard let interval = UpdateCheckInterval(rawValue: updateInterval) else {
+            throw HomeportError.commandFailed("Unknown --update-interval value: \(updateInterval)")
+        }
+        var state = try service.loadState()
+        state.preferences.updateCheckInterval = interval
+        try service.saveState(state)
+        print("Update interval: \(interval.rawValue)")
+    }
+
+    if let autoInstallUpdates = option(arguments, "--auto-install-updates") {
+        var state = try service.loadState()
+        state.preferences.autoInstallUpdates = try strictBoolValue(autoInstallUpdates, optionName: "--auto-install-updates")
+        if state.preferences.autoInstallUpdates {
+            state.preferences.autoUpdateChecksEnabled = true
+        }
+        try service.saveState(state)
+        print("Auto-install updates: \(state.preferences.autoInstallUpdates)")
+    }
+
     if let autostartValue = option(arguments, "--autostart") {
         switch autostartValue {
         case "on", "enable", "true", "yes":
@@ -515,6 +545,9 @@ func configure(_ arguments: [String]) throws {
         print("Clone includes: \(cloneOptionSummary(state.preferences.cloneOptions))")
         print("Launch temporary by default: \(state.preferences.launchTemporaryByDefault)")
         print("Install app by default: \(state.preferences.installAppByDefault)")
+        print("Update checks enabled: \(state.preferences.autoUpdateChecksEnabled)")
+        print("Update interval: \(state.preferences.updateCheckInterval.rawValue)")
+        print("Auto-install updates: \(state.preferences.autoInstallUpdates)")
         try autostart(["status"])
     }
 }
@@ -693,6 +726,17 @@ func option(_ arguments: [String], _ name: String) -> String? {
 
 func boolValue(_ value: String) -> Bool {
     ["1", "true", "yes", "on", "enable", "enabled"].contains(value.lowercased())
+}
+
+func strictBoolValue(_ value: String, optionName: String) throws -> Bool {
+    switch value.lowercased() {
+    case "1", "true", "yes", "on", "enable", "enabled":
+        return true
+    case "0", "false", "no", "off", "disable", "disabled":
+        return false
+    default:
+        throw HomeportError.commandFailed("Unknown \(optionName) value: \(value)")
+    }
 }
 
 func cloneOptions(from arguments: [String], base: CloneOptions) -> CloneOptions {
@@ -1161,6 +1205,9 @@ Options:
   --clone-exclude LIST                  Remember clone categories to exclude.
   --temporary on|off                    Prefer temporary launch mode in UI.
   --install-app on|off                  Default whether onboarding installs app.
+  --update-checks on|off                Enable proactive npm update checks.
+  --update-interval daily|weekly        How often the app checks for updates.
+  --auto-install-updates on|off         Install available updates without prompting.
   --autostart on|off|status             Manage login autostart.
   --reset                               Reset Homeport preferences to defaults.
   --show                                Print current configuration.
@@ -1173,6 +1220,8 @@ Examples:
   homeport configure --clone-preset config-only
   homeport configure --clone-include config,skills,plugins
   homeport configure --clone-exclude auth,sessions
+  homeport configure --update-checks on --update-interval weekly
+  homeport configure --auto-install-updates off
   homeport configure --reset
   homeport configure --autostart on
 """ }

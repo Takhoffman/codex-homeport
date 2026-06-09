@@ -194,6 +194,56 @@ public final class HomeportService: @unchecked Sendable {
         try diagnostics.clearGlobalCodexHome()
     }
 
+    public func shouldCheckForUpdates(now: Date = Date()) throws -> Bool {
+        let state = try store.load()
+        guard state.preferences.autoUpdateChecksEnabled else {
+            return false
+        }
+        guard let lastCheckedAt = state.updater.lastCheckedAt else {
+            return true
+        }
+        return now.timeIntervalSince(lastCheckedAt) >= state.preferences.updateCheckInterval.seconds
+    }
+
+    public func checkForUpdates(now: Date = Date()) throws -> UpdaterState {
+        let latestVersion = try latestPublishedVersion()
+        var state = try store.load()
+        state.updater.lastCheckedAt = now
+        state.updater.latestVersion = latestVersion
+        state.updater.lastError = nil
+        if compareVersions(latestVersion, AppVersion.version) != .orderedDescending {
+            state.updater.dismissedVersion = nil
+            state.updater.installStartedAt = nil
+        }
+        try store.save(state)
+        return state.updater
+    }
+
+    public func recordUpdateCheckError(_ error: Error, now: Date = Date()) throws {
+        var state = try store.load()
+        state.updater.lastCheckedAt = now
+        state.updater.lastError = error.localizedDescription
+        try store.save(state)
+    }
+
+    public func dismissAvailableUpdate() throws {
+        var state = try store.load()
+        state.updater.dismissedVersion = state.updater.latestVersion
+        try store.save(state)
+    }
+
+    public func installAvailableUpdate(now: Date = Date()) throws -> URL {
+        var state = try store.load()
+        guard state.updater.updateAvailable() else {
+            throw HomeportError.commandFailed("No Homeport update is available.")
+        }
+        state.updater.installStartedAt = now
+        state.updater.lastError = nil
+        try store.save(state)
+        try launchDetachedUpdater()
+        return paths.updateLogFile
+    }
+
     private func createManagedHome(
         name: String,
         slug: String,
@@ -257,6 +307,70 @@ public final class HomeportService: @unchecked Sendable {
             return false
         }
         return kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    private func latestPublishedVersion() throws -> String {
+        let output = try runProcessCapturingOutput(
+            "zsh",
+            [
+                "-lc",
+                "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"; npm view codex-homeport version --silent"
+            ],
+            timeout: 30
+        )
+        let version = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !version.isEmpty else {
+            throw HomeportError.commandFailed("npm did not return a codex-homeport version.")
+        }
+        return version
+    }
+
+    private func runProcessCapturingOutput(_ executable: String, _ arguments: [String], timeout: TimeInterval) throws -> String {
+        let process = Process()
+        let output = Pipe()
+        let errorOutput = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [executable] + arguments
+        process.standardOutput = output
+        process.standardError = errorOutput
+        try process.run()
+
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            process.waitUntilExit()
+            finished.signal()
+        }
+
+        if finished.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            throw HomeportError.commandFailed("\(executable) timed out after \(Int(timeout)) seconds")
+        }
+
+        let outputData = output.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorOutput.fileHandleForReading.readDataToEndOfFile()
+        if process.terminationStatus != 0 {
+            let message = String(data: errorData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw HomeportError.commandFailed(message?.isEmpty == false ? message! : "\(executable) exited with \(process.terminationStatus)")
+        }
+        return String(data: outputData, encoding: .utf8) ?? ""
+    }
+
+    private func launchDetachedUpdater() throws {
+        try fileManager.createDirectory(at: paths.appSupportDirectory, withIntermediateDirectories: true)
+        let command = """
+        set -e
+        export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+        npm install -g codex-homeport@latest
+        package_root="$(npm root -g)/codex-homeport"
+        test -f "$package_root/Package.swift"
+        homeport update --with-app --no-restart --repo "$package_root"
+        """
+        let shellCommand = "nohup /bin/zsh -lc \(shellQuote(command)) >> \(shellQuote(paths.updateLogFile.path)) 2>&1 &"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", shellCommand]
+        try process.run()
     }
 
     private func uniqueSlug(base: String) -> String {

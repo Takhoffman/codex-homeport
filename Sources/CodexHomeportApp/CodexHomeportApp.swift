@@ -6,10 +6,12 @@ struct CodexHomeportApp: App {
     @StateObject private var model = HomeportModel()
 
     var body: some Scene {
-        MenuBarExtra("Codex Homeport", systemImage: model.menuIcon) {
+        MenuBarExtra {
             HomeportMenuView()
                 .environmentObject(model)
                 .frame(width: 390)
+        } label: {
+            MenuBarBadgeIcon(symbol: model.menuIcon, showsBadge: model.updateAvailable)
         }
         .menuBarExtraStyle(.window)
 
@@ -21,17 +23,42 @@ struct CodexHomeportApp: App {
     }
 }
 
+struct MenuBarBadgeIcon: View {
+    var symbol: String
+    var showsBadge: Bool
+
+    var body: some View {
+        Image(systemName: symbol)
+            .overlay(alignment: .topTrailing) {
+                if showsBadge {
+                    Circle()
+                        .fill(.red)
+                        .frame(width: 6, height: 6)
+                        .offset(x: 3, y: -3)
+                }
+            }
+            .help(showsBadge ? "Codex Homeport update available" : "Codex Homeport")
+    }
+}
+
 @MainActor
 final class HomeportModel: ObservableObject {
     @Published var state = HomeportState()
     @Published var report = DiagnosticReport(globalCodexHome: nil, mainSessionCount: 0, suspiciousLaunchers: [], codexBinaryPath: nil, codexAppExists: false, notes: [])
     @Published var status = "Ready"
     @Published var workspacePath = FileManager.default.currentDirectoryPath
+    @Published var isCheckingForUpdates = false
+    @Published var isInstallingUpdate = false
 
     let service = HomeportService()
+    private var updateMonitorTask: Task<Void, Never>?
 
     var menuIcon: String {
         report.globalCodexHome == nil && report.suspiciousLaunchers.isEmpty ? "sailboat" : "exclamationmark.triangle"
+    }
+
+    var updateAvailable: Bool {
+        state.updater.updateAvailable()
     }
 
     var pinnedHomes: [CodexHome] {
@@ -46,6 +73,7 @@ final class HomeportModel: ObservableObject {
 
     init() {
         refresh()
+        startUpdateMonitor()
     }
 
     func refresh(statusMessage: String? = nil) {
@@ -224,6 +252,124 @@ final class HomeportModel: ObservableObject {
         }
     }
 
+    func setAutoUpdateChecksEnabled(_ value: Bool) {
+        do {
+            var next = try service.loadState()
+            next.preferences.autoUpdateChecksEnabled = value
+            if !value {
+                next.preferences.autoInstallUpdates = false
+            }
+            try service.saveState(next)
+            refresh(statusMessage: value ? "Enabled update checks" : "Disabled update checks")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func setAutoInstallUpdates(_ value: Bool) {
+        do {
+            var next = try service.loadState()
+            next.preferences.autoInstallUpdates = value
+            if value {
+                next.preferences.autoUpdateChecksEnabled = true
+            }
+            try service.saveState(next)
+            refresh(statusMessage: value ? "Enabled automatic installs" : "Disabled automatic installs")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func setUpdateCheckInterval(_ interval: UpdateCheckInterval) {
+        do {
+            var next = try service.loadState()
+            next.preferences.updateCheckInterval = interval
+            try service.saveState(next)
+            refresh(statusMessage: "Saved update schedule")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func checkForUpdates(force: Bool = true) {
+        Task {
+            await checkForUpdatesIfNeeded(force: force)
+        }
+    }
+
+    func installUpdate() {
+        guard updateAvailable else {
+            status = "No Homeport update is available"
+            return
+        }
+        isInstallingUpdate = true
+        do {
+            let logFile = try service.installAvailableUpdate()
+            refresh(statusMessage: "Installing update in background; log: \(logFile.path)")
+        } catch {
+            status = error.localizedDescription
+        }
+        isInstallingUpdate = false
+    }
+
+    func dismissUpdate() {
+        do {
+            try service.dismissAvailableUpdate()
+            refresh(statusMessage: "Update hidden until the next version")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func startUpdateMonitor() {
+        guard updateMonitorTask == nil else {
+            return
+        }
+        updateMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.checkForUpdatesIfNeeded(force: false)
+                try? await Task.sleep(nanoseconds: 60 * 60 * 1_000_000_000)
+            }
+        }
+    }
+
+    private func checkForUpdatesIfNeeded(force: Bool) async {
+        guard state.preferences.autoUpdateChecksEnabled || force else {
+            return
+        }
+        do {
+            let shouldCheck = force ? true : try service.shouldCheckForUpdates()
+            guard shouldCheck else {
+                return
+            }
+        } catch {
+            status = error.localizedDescription
+            return
+        }
+
+        isCheckingForUpdates = true
+        if force {
+            status = "Checking for Homeport updates"
+        }
+        let service = service
+        let result = await Task.detached {
+            Result { try service.checkForUpdates() }
+        }.value
+
+        switch result {
+        case .success(let updater):
+            let hasUpdate = updater.updateAvailable()
+            refresh(statusMessage: hasUpdate ? "Homeport \(updater.latestVersion ?? "") is available" : "Homeport is up to date")
+            if hasUpdate && state.preferences.autoInstallUpdates {
+                installUpdate()
+            }
+        case .failure(let error):
+            try? service.recordUpdateCheckError(error)
+            refresh(statusMessage: error.localizedDescription)
+        }
+        isCheckingForUpdates = false
+    }
+
     func updateCloneOptions(_ transform: (inout CloneOptions) -> Void) {
         do {
             var next = try service.loadState()
@@ -380,6 +526,18 @@ struct HomeportMenuView: View {
                 refreshAction: { model.refresh() }
             )
 
+            if focusedHome == nil && model.updateAvailable {
+                UpdateAvailableBanner(
+                    openSettings: {
+                        selectedTab = .settings
+                        isEditingList = false
+                    },
+                    dismiss: { model.dismissUpdate() }
+                )
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+            }
+
             ScrollView {
                 Group {
                     if let focusedHome {
@@ -517,6 +675,47 @@ struct HomeportMenuView: View {
     }
 }
 
+struct UpdateAvailableBanner: View {
+    @EnvironmentObject var model: HomeportModel
+    var openSettings: () -> Void
+    var dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(.red)
+                .frame(width: 7, height: 7)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Update available")
+                    .font(.caption.weight(.semibold))
+                Text(versionText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Details") {
+                openSettings()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            Button("Later", action: dismiss)
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.blue.opacity(0.24)))
+    }
+
+    private var versionText: String {
+        if let latestVersion = model.state.updater.latestVersion {
+            return "Homeport \(latestVersion) is available"
+        }
+        return "A newer Homeport is available"
+    }
+}
+
 struct PhoneMenuHeader: View {
     var title: String
     var subtitle: String
@@ -574,6 +773,7 @@ struct PhoneMenuHeader: View {
 }
 
 struct PhoneTabBar: View {
+    @EnvironmentObject var model: HomeportModel
     @Binding var selectedTab: MenuTab
     var onSelect: () -> Void
 
@@ -587,6 +787,14 @@ struct PhoneTabBar: View {
                     VStack(spacing: 3) {
                         Image(systemName: tab.symbol)
                             .font(.system(size: 16, weight: .semibold))
+                            .overlay(alignment: .topTrailing) {
+                                if tab == .settings && model.updateAvailable {
+                                    Circle()
+                                        .fill(.red)
+                                        .frame(width: 6, height: 6)
+                                        .offset(x: 5, y: -2)
+                                }
+                            }
                         Text(tab.title == "New Home" ? "New" : tab.title)
                             .font(.caption2.weight(.semibold))
                     }
@@ -871,7 +1079,7 @@ struct SettingsTab: View {
             Toggle("Install app by default", isOn: .constant(model.state.preferences.installAppByDefault))
                 .disabled(true)
             SectionLabel("Install")
-            InfoCard(title: "Update Homeport", subtitle: "npm install -g codex-homeport@latest")
+            AutoUpdaterCard()
             HStack {
                 Button("Open Console", action: openConsole)
                 Spacer()
@@ -883,6 +1091,108 @@ struct SettingsTab: View {
             }
             .buttonStyle(.bordered)
         }
+    }
+}
+
+struct AutoUpdaterCard: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: model.updateAvailable ? "arrow.down.circle.fill" : "arrow.triangle.2.circlepath")
+                    .foregroundStyle(model.updateAvailable ? .blue : .primary)
+                    .frame(width: 26, height: 26)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(headline)
+                        .font(.caption.weight(.semibold))
+                    Text(statusText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if model.updateAvailable {
+                    VStack(spacing: 6) {
+                        Button(model.isInstallingUpdate ? "Updating" : "Update") {
+                            model.installUpdate()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(model.isInstallingUpdate)
+                        Button("Later") {
+                            model.dismissUpdate()
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                    }
+                } else {
+                    Button(model.isCheckingForUpdates ? "Checking" : "Check Now") {
+                        model.checkForUpdates()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(model.isCheckingForUpdates)
+                }
+            }
+
+            if let lastError = model.state.updater.lastError {
+                Text(lastError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(3)
+            }
+
+            Toggle("Check for updates", isOn: Binding(
+                get: { model.state.preferences.autoUpdateChecksEnabled },
+                set: { model.setAutoUpdateChecksEnabled($0) }
+            ))
+
+            Picker("Schedule", selection: Binding(
+                get: { model.state.preferences.updateCheckInterval },
+                set: { model.setUpdateCheckInterval($0) }
+            )) {
+                ForEach(UpdateCheckInterval.allCases, id: \.self) { interval in
+                    Text(interval.displayName).tag(interval)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!model.state.preferences.autoUpdateChecksEnabled)
+
+            Toggle("Install updates automatically", isOn: Binding(
+                get: { model.state.preferences.autoInstallUpdates },
+                set: { model.setAutoInstallUpdates($0) }
+            ))
+            .disabled(!model.state.preferences.autoUpdateChecksEnabled)
+
+            Text("Manual path: npm install -g codex-homeport@latest && homeport update --with-app")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .padding(12)
+        .background(model.updateAvailable ? Color.blue.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(model.updateAvailable ? Color.blue.opacity(0.28) : Color.secondary.opacity(0.15)))
+    }
+
+    private var headline: String {
+        if let latestVersion = model.state.updater.latestVersion, model.updateAvailable {
+            return "Homeport \(latestVersion) is available"
+        }
+        return "Auto Updater"
+    }
+
+    private var statusText: String {
+        if model.updateAvailable {
+            return "Install from npm when you choose"
+        }
+        if model.state.preferences.autoInstallUpdates {
+            return "\(model.state.preferences.updateCheckInterval.displayName) checks, automatic install"
+        }
+        if model.state.preferences.autoUpdateChecksEnabled {
+            return "\(model.state.preferences.updateCheckInterval.displayName) checks, notify before install"
+        }
+        return "Manual updates only"
     }
 }
 

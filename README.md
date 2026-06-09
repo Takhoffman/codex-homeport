@@ -80,6 +80,16 @@ homeport update
 When installed through npm, `homeport update` rebuilds and reinstalls the app
 from the npm package. Use npm itself to fetch new published versions.
 
+The app's Settings tab includes the auto-updater. When the app is running, it
+checks npm daily or weekly, badges Settings and the menu bar icon when a newer
+version is available, and installs only after you choose Update unless automatic
+installs are enabled. Updates run the same safe path the app shows:
+
+```sh
+npm install -g codex-homeport@latest
+homeport update --with-app
+```
+
 If you already have the source repo checked out, you can still install directly
 from the current checkout:
 
@@ -134,13 +144,6 @@ package, publishes `codex-homeport` to npm using the `NPM_TOKEN` repository
 secret, and creates a GitHub Release from `releases/vX.Y.Z.md`. Users update
 with `npm install -g codex-homeport@latest`.
 
-## UI Mockups
-
-The phone-style tab mockup is at
-[`docs/mockups/iphone-tabs.html`](docs/mockups/iphone-tabs.html). It mirrors the
-menu model used by the SwiftUI app: Favorites, Recents, Homes, New, and Settings
-with focused home detail views.
-
 Autostart is managed by a user LaunchAgent:
 
 ```sh
@@ -159,6 +162,9 @@ homeport configure --clone-preset config-only
 homeport configure --clone-include config,skills,plugins
 homeport configure --clone-exclude auth,sessions
 homeport configure --temporary on
+homeport configure --update-checks on
+homeport configure --update-interval weekly
+homeport configure --auto-install-updates off
 homeport configure --autostart on
 homeport configure --show
 homeport configure --reset

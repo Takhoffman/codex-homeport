@@ -40,6 +40,58 @@ public enum TerminalApp: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public enum UpdateCheckInterval: String, Codable, CaseIterable, Sendable {
+    case daily
+    case weekly
+
+    public var seconds: TimeInterval {
+        switch self {
+        case .daily: 60 * 60 * 24
+        case .weekly: 60 * 60 * 24 * 7
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .daily: "Daily"
+        case .weekly: "Weekly"
+        }
+    }
+}
+
+public struct UpdaterState: Codable, Equatable, Sendable {
+    public var lastCheckedAt: Date?
+    public var latestVersion: String?
+    public var dismissedVersion: String?
+    public var installStartedAt: Date?
+    public var lastError: String?
+
+    public init(
+        lastCheckedAt: Date? = nil,
+        latestVersion: String? = nil,
+        dismissedVersion: String? = nil,
+        installStartedAt: Date? = nil,
+        lastError: String? = nil
+    ) {
+        self.lastCheckedAt = lastCheckedAt
+        self.latestVersion = latestVersion
+        self.dismissedVersion = dismissedVersion
+        self.installStartedAt = installStartedAt
+        self.lastError = lastError
+    }
+
+    public func updateAvailable(currentVersion: String = AppVersion.version) -> Bool {
+        guard let latestVersion else {
+            return false
+        }
+        guard installStartedAt == nil else {
+            return false
+        }
+        return compareVersions(latestVersion, currentVersion) == .orderedDescending
+            && dismissedVersion != latestVersion
+    }
+}
+
 public enum InstanceStatus: String, Codable, Sendable {
     case running
     case closed
@@ -142,6 +194,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
     public var preferredTerminal: TerminalApp
     public var lastWorkspacePath: String?
     public var preferences: HomeportPreferences
+    public var updater: UpdaterState
 
     public init(
         version: Int = 1,
@@ -150,7 +203,8 @@ public struct HomeportState: Codable, Equatable, Sendable {
         pinnedHomeIDs: [UUID] = [],
         preferredTerminal: TerminalApp = .terminal,
         lastWorkspacePath: String? = nil,
-        preferences: HomeportPreferences = HomeportPreferences()
+        preferences: HomeportPreferences = HomeportPreferences(),
+        updater: UpdaterState = UpdaterState()
     ) {
         self.version = version
         self.homes = homes
@@ -159,6 +213,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
         self.preferredTerminal = preferredTerminal
         self.lastWorkspacePath = lastWorkspacePath
         self.preferences = preferences
+        self.updater = updater
     }
 
     enum CodingKeys: String, CodingKey {
@@ -169,6 +224,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
         case preferredTerminal
         case lastWorkspacePath
         case preferences
+        case updater
     }
 
     public init(from decoder: Decoder) throws {
@@ -180,6 +236,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
         self.preferredTerminal = try container.decodeIfPresent(TerminalApp.self, forKey: .preferredTerminal) ?? .terminal
         self.lastWorkspacePath = try container.decodeIfPresent(String.self, forKey: .lastWorkspacePath)
         self.preferences = try container.decodeIfPresent(HomeportPreferences.self, forKey: .preferences) ?? HomeportPreferences()
+        self.updater = try container.decodeIfPresent(UpdaterState.self, forKey: .updater) ?? UpdaterState()
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -191,6 +248,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
         try container.encode(preferredTerminal, forKey: .preferredTerminal)
         try container.encodeIfPresent(lastWorkspacePath, forKey: .lastWorkspacePath)
         try container.encode(preferences, forKey: .preferences)
+        try container.encode(updater, forKey: .updater)
     }
 }
 
@@ -201,6 +259,9 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
     public var launchTemporaryByDefault: Bool
     public var onboardEnablesAutostart: Bool
     public var installAppByDefault: Bool
+    public var autoUpdateChecksEnabled: Bool
+    public var autoInstallUpdates: Bool
+    public var updateCheckInterval: UpdateCheckInterval
 
     public init(
         defaultLaunchTarget: LaunchTarget = .desktop,
@@ -208,7 +269,10 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         cloneOptions: CloneOptions = CloneOptions.workingSetup,
         launchTemporaryByDefault: Bool = false,
         onboardEnablesAutostart: Bool = true,
-        installAppByDefault: Bool = true
+        installAppByDefault: Bool = true,
+        autoUpdateChecksEnabled: Bool = true,
+        autoInstallUpdates: Bool = false,
+        updateCheckInterval: UpdateCheckInterval = .daily
     ) {
         self.defaultLaunchTarget = defaultLaunchTarget
         self.defaultClonePreset = defaultClonePreset
@@ -216,6 +280,34 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         self.launchTemporaryByDefault = launchTemporaryByDefault
         self.onboardEnablesAutostart = onboardEnablesAutostart
         self.installAppByDefault = installAppByDefault
+        self.autoUpdateChecksEnabled = autoUpdateChecksEnabled
+        self.autoInstallUpdates = autoInstallUpdates
+        self.updateCheckInterval = updateCheckInterval
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case defaultLaunchTarget
+        case defaultClonePreset
+        case cloneOptions
+        case launchTemporaryByDefault
+        case onboardEnablesAutostart
+        case installAppByDefault
+        case autoUpdateChecksEnabled
+        case autoInstallUpdates
+        case updateCheckInterval
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.defaultLaunchTarget = try container.decodeIfPresent(LaunchTarget.self, forKey: .defaultLaunchTarget) ?? .desktop
+        self.defaultClonePreset = try container.decodeIfPresent(ClonePreset.self, forKey: .defaultClonePreset) ?? .workingSetup
+        self.cloneOptions = try container.decodeIfPresent(CloneOptions.self, forKey: .cloneOptions) ?? .workingSetup
+        self.launchTemporaryByDefault = try container.decodeIfPresent(Bool.self, forKey: .launchTemporaryByDefault) ?? false
+        self.onboardEnablesAutostart = try container.decodeIfPresent(Bool.self, forKey: .onboardEnablesAutostart) ?? true
+        self.installAppByDefault = try container.decodeIfPresent(Bool.self, forKey: .installAppByDefault) ?? true
+        self.autoUpdateChecksEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoUpdateChecksEnabled) ?? true
+        self.autoInstallUpdates = try container.decodeIfPresent(Bool.self, forKey: .autoInstallUpdates) ?? false
+        self.updateCheckInterval = try container.decodeIfPresent(UpdateCheckInterval.self, forKey: .updateCheckInterval) ?? .daily
     }
 }
 
@@ -331,6 +423,35 @@ public struct CloneOptions: Codable, Equatable, Sendable {
         case .everything: .full
         }
     }
+}
+
+public func compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
+    let left = versionComponents(lhs)
+    let right = versionComponents(rhs)
+    let count = max(left.count, right.count)
+
+    for index in 0..<count {
+        let leftValue = index < left.count ? left[index] : 0
+        let rightValue = index < right.count ? right[index] : 0
+        if leftValue > rightValue {
+            return .orderedDescending
+        }
+        if leftValue < rightValue {
+            return .orderedAscending
+        }
+    }
+
+    return .orderedSame
+}
+
+private func versionComponents(_ version: String) -> [Int] {
+    version
+        .trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+        .split(separator: ".")
+        .map { part in
+            let digits = part.prefix { $0.isNumber }
+            return Int(digits) ?? 0
+        }
 }
 
 public struct DiagnosticReport: Equatable, Sendable {

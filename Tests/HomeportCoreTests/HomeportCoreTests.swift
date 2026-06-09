@@ -133,6 +133,70 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertTrue(try service.loadState().pinnedHomeIDs.isEmpty)
     }
 
+    func testPreferencesDecodeOlderStateWithUpdaterDefaults() throws {
+        let data = """
+        {
+          "defaultLaunchTarget": "desktop",
+          "defaultClonePreset": "working-setup",
+          "cloneOptions": {
+            "config": true,
+            "auth": true,
+            "skills": true,
+            "plugins": true,
+            "agents": true,
+            "prompts": true,
+            "rules": true,
+            "profiles": true,
+            "memories": true,
+            "browserSupport": true,
+            "sessionsAndLogs": false,
+            "everything": false
+          },
+          "launchTemporaryByDefault": false,
+          "onboardEnablesAutostart": true,
+          "installAppByDefault": true
+        }
+        """.data(using: .utf8)!
+
+        let preferences = try JSONDecoder().decode(HomeportPreferences.self, from: data)
+
+        XCTAssertTrue(preferences.autoUpdateChecksEnabled)
+        XCTAssertFalse(preferences.autoInstallUpdates)
+        XCTAssertEqual(preferences.updateCheckInterval, .daily)
+    }
+
+    func testVersionComparisonHandlesSemverLikeStrings() {
+        XCTAssertEqual(compareVersions("0.4.0", "0.3.9"), .orderedDescending)
+        XCTAssertEqual(compareVersions("v0.3.0", "0.3.0"), .orderedSame)
+        XCTAssertEqual(compareVersions("0.3.0", "0.3.1"), .orderedAscending)
+    }
+
+    func testUpdaterCheckScheduleUsesSavedInterval() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        var state = try service.loadState()
+        let now = Date()
+        state.preferences.autoUpdateChecksEnabled = true
+        state.preferences.updateCheckInterval = .daily
+        state.updater.lastCheckedAt = now.addingTimeInterval(-60 * 60)
+        try service.saveState(state)
+
+        XCTAssertFalse(try service.shouldCheckForUpdates(now: now))
+
+        state.updater.lastCheckedAt = now.addingTimeInterval(-60 * 60 * 25)
+        try service.saveState(state)
+
+        XCTAssertTrue(try service.shouldCheckForUpdates(now: now))
+    }
+
+    func testUpdaterAvailabilityStopsAfterInstallStarts() {
+        let available = UpdaterState(latestVersion: "9.9.9")
+        XCTAssertTrue(available.updateAvailable(currentVersion: "0.3.0"))
+
+        let installing = UpdaterState(latestVersion: "9.9.9", installStartedAt: Date())
+        XCTAssertFalse(installing.updateAvailable(currentVersion: "0.3.0"))
+    }
+
     private func makeTempRoot() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
