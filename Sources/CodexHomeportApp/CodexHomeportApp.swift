@@ -290,6 +290,8 @@ struct HomeportMenuView: View {
 
             RecentMenuSection()
 
+            HomeLaunchSection()
+
             Divider()
 
             FormSection(
@@ -430,6 +432,106 @@ struct RecentMenuSection: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+struct HomeLaunchSection: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var body: some View {
+        if !model.state.homes.isEmpty {
+            FormSection(
+                title: "Your Homes",
+                help: "New homes show up here. Press a row to open that home."
+            ) {
+                VStack(spacing: 6) {
+                    ForEach(model.state.homes.prefix(5)) { home in
+                        HomeLaunchRow(home: home)
+                    }
+                    if model.state.homes.count > 5 {
+                        Text("Open Console to see all \(model.state.homes.count) homes.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct HomeLaunchRow: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var home: CodexHome
+
+    private var defaultTarget: LaunchTarget {
+        model.state.preferences.defaultLaunchTarget
+    }
+
+    private var otherTarget: LaunchTarget {
+        defaultTarget == .desktop ? .terminal : .desktop
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button {
+                model.launch(home.slug, target: defaultTarget)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: icon(for: home))
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(home.name)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                        Text("\(kindLabel(for: home)) • opens in \(defaultTargetLabel)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            Button {
+                model.launch(home.slug, target: otherTarget)
+            } label: {
+                Image(systemName: otherTarget == .desktop ? "macwindow" : "terminal")
+                    .frame(width: 20)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Open \(home.name) in \(otherTargetLabel)")
+        }
+    }
+
+    private var defaultTargetLabel: String {
+        defaultTarget == .desktop ? "Codex.app" : "Terminal"
+    }
+
+    private var otherTargetLabel: String {
+        otherTarget == .desktop ? "Codex.app" : "Terminal"
+    }
+
+    private func kindLabel(for home: CodexHome) -> String {
+        switch home.kind {
+        case .main: "Main home"
+        case .clone: "Copied home"
+        case .cleanRoom: "Fresh home"
+        case .temporary: "Temporary home"
+        }
+    }
+
+    private func icon(for home: CodexHome) -> String {
+        switch home.kind {
+        case .main: "house"
+        case .clone: "square.on.square"
+        case .cleanRoom: "sparkles"
+        case .temporary: "timer"
+        }
     }
 }
 
