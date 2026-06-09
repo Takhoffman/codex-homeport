@@ -243,6 +243,7 @@ final class HomeportModel: ObservableObject {
 struct HomeportMenuView: View {
     @EnvironmentObject var model: HomeportModel
     @Environment(\.openWindow) private var openWindow
+    @State private var showingOptions = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -264,12 +265,23 @@ struct HomeportMenuView: View {
                 .buttonStyle(.borderless)
             }
 
-            VStack(spacing: 8) {
-                LaunchTile(title: "Launch Preferred", subtitle: preferredSubtitle, symbol: "play.circle") {
-                    model.launchPreferred()
+            PrimaryLaunchButton(
+                title: primaryTitle,
+                subtitle: primarySubtitle,
+                symbol: primarySymbol
+            ) {
+                model.launchPreferred()
+            }
+
+            HStack(spacing: 8) {
+                SecondaryLaunchButton(title: alternateTargetTitle, symbol: alternateTargetSymbol) {
+                    model.launch("main", target: alternateTarget)
                 }
-                LaunchTile(title: "Throwaway App", subtitle: "Temporary Codex.app, cleanup review", symbol: "timer") {
+                SecondaryLaunchButton(title: "Throwaway", symbol: "timer") {
                     model.launch("temp", target: .desktop)
+                }
+                SecondaryLaunchButton(title: "Console", symbol: "sidebar.left") {
+                    openWindow(id: "console")
                 }
             }
 
@@ -279,12 +291,19 @@ struct HomeportMenuView: View {
 
             Divider()
 
-            QuickOptions()
+            DisclosureGroup(isExpanded: $showingOptions) {
+                QuickOptions()
+                    .padding(.top, 6)
+            } label: {
+                Label("Options", systemImage: "slider.horizontal.3")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
 
             Divider()
 
             HStack {
-                Button("Clone My Setup") {
+                Button("Clone Setup") {
                     model.cloneWorkingSetup()
                 }
                 Button("Clean Room") {
@@ -300,9 +319,6 @@ struct HomeportMenuView: View {
             }
 
             HStack {
-                Button("Console") {
-                    openWindow(id: "console")
-                }
                 Spacer()
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)
@@ -312,9 +328,32 @@ struct HomeportMenuView: View {
         .padding(16)
     }
 
-    private var preferredSubtitle: String {
+    private var primaryTitle: String {
+        let home = model.state.preferences.launchTemporaryByDefault ? "Temporary" : "Main"
+        let surface = model.state.preferences.defaultLaunchTarget == .desktop ? "Codex" : "Terminal"
+        return "Open \(home) in \(surface)"
+    }
+
+    private var primarySubtitle: String {
         let home = model.state.preferences.launchTemporaryByDefault ? "temporary" : "main"
-        return "\(home), \(model.state.preferences.defaultLaunchTarget.rawValue)"
+        let target = model.state.preferences.defaultLaunchTarget == .desktop ? "desktop app" : "terminal"
+        return "\(home) home • \(target)"
+    }
+
+    private var primarySymbol: String {
+        model.state.preferences.defaultLaunchTarget == .desktop ? "play.circle.fill" : "terminal.fill"
+    }
+
+    private var alternateTarget: LaunchTarget {
+        model.state.preferences.defaultLaunchTarget == .desktop ? .terminal : .desktop
+    }
+
+    private var alternateTargetTitle: String {
+        alternateTarget == .desktop ? "Desktop" : "Terminal"
+    }
+
+    private var alternateTargetSymbol: String {
+        alternateTarget == .desktop ? "macwindow" : "terminal"
     }
 }
 
@@ -401,6 +440,53 @@ struct CompactLaunchRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct PrimaryLaunchButton: View {
+    var title: String
+    var subtitle: String
+    var symbol: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: symbol)
+                    .font(.title3)
+                    .frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.headline.weight(.semibold))
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "return")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+    }
+}
+
+struct SecondaryLaunchButton: View {
+    var title: String
+    var symbol: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 }
 
