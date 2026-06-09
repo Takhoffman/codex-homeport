@@ -48,12 +48,12 @@ final class HomeportModel: ObservableObject {
         refresh()
     }
 
-    func refresh() {
+    func refresh(statusMessage: String? = nil) {
         do {
             state = try service.loadState()
             report = service.report()
             workspacePath = state.lastWorkspacePath ?? workspacePath
-            status = "Ready"
+            status = statusMessage ?? "Ready"
         } catch {
             status = error.localizedDescription
         }
@@ -63,8 +63,7 @@ final class HomeportModel: ObservableObject {
         do {
             let actualSelector = modelSelector(for: selector)
             let instance = try service.launch(selector: actualSelector, target: target, workspace: workspacePath)
-            status = "Launched \(instance.homeName) as \(target.rawValue)"
-            refresh()
+            refresh(statusMessage: "Opened \(instance.homeName) in \(target.rawValue)")
         } catch {
             status = error.localizedDescription
         }
@@ -89,8 +88,7 @@ final class HomeportModel: ObservableObject {
                 preset: state.preferences.defaultClonePreset,
                 options: state.preferences.cloneOptions
             )
-            status = "Cloned working setup"
-            refresh()
+            refresh(statusMessage: "Created copied home")
         } catch {
             status = error.localizedDescription
         }
@@ -99,8 +97,7 @@ final class HomeportModel: ObservableObject {
     func cleanRoom() {
         do {
             _ = try service.createCleanRoom()
-            status = "Created clean room"
-            refresh()
+            refresh(statusMessage: "Created fresh home")
         } catch {
             status = error.localizedDescription
         }
@@ -109,8 +106,7 @@ final class HomeportModel: ObservableObject {
     func createTemporaryHome() {
         do {
             _ = try service.createTemporary()
-            status = "Created temporary home"
-            refresh()
+            refresh(statusMessage: "Created temporary home")
         } catch {
             status = error.localizedDescription
         }
@@ -119,8 +115,7 @@ final class HomeportModel: ObservableObject {
     func renameHome(_ home: CodexHome, name: String) {
         do {
             try service.renameHome(id: home.id, name: name)
-            status = "Renamed \(home.name)"
-            refresh()
+            refresh(statusMessage: "Renamed \(home.name)")
         } catch {
             status = error.localizedDescription
         }
@@ -129,8 +124,7 @@ final class HomeportModel: ObservableObject {
     func deleteHome(_ home: CodexHome) {
         do {
             _ = try service.deleteHome(id: home.id)
-            status = "Moved \(home.name) to Trash"
-            refresh()
+            refresh(statusMessage: "Moved \(home.name) to Trash")
         } catch {
             status = error.localizedDescription
         }
@@ -139,8 +133,7 @@ final class HomeportModel: ObservableObject {
     func setHomePinned(_ home: CodexHome, pinned: Bool) {
         do {
             try service.setHomePinned(id: home.id, pinned: pinned)
-            status = pinned ? "Pinned \(home.name)" : "Unpinned \(home.name)"
-            refresh()
+            refresh(statusMessage: pinned ? "Pinned \(home.name)" : "Unpinned \(home.name)")
         } catch {
             status = error.localizedDescription
         }
@@ -153,8 +146,7 @@ final class HomeportModel: ObservableObject {
     func cleanup(_ instance: LaunchedInstance) {
         do {
             _ = try service.cleanup(instanceID: instance.id)
-            status = "Cleaned \(instance.homeName)"
-            refresh()
+            refresh(statusMessage: "Cleaned \(instance.homeName)")
         } catch {
             status = error.localizedDescription
         }
@@ -163,8 +155,7 @@ final class HomeportModel: ObservableObject {
     func promote(_ instance: LaunchedInstance) {
         do {
             try service.promote(instanceID: instance.id)
-            status = "Promoted \(instance.homeName)"
-            refresh()
+            refresh(statusMessage: "Promoted \(instance.homeName)")
         } catch {
             status = error.localizedDescription
         }
@@ -173,8 +164,7 @@ final class HomeportModel: ObservableObject {
     func repair() {
         do {
             try service.clearGlobalCodexHome()
-            status = "Cleared GUI CODEX_HOME"
-            refresh()
+            refresh(statusMessage: "Cleared GUI CODEX_HOME")
         } catch {
             status = error.localizedDescription
         }
@@ -185,7 +175,7 @@ final class HomeportModel: ObservableObject {
             var next = try service.loadState()
             next.preferences.defaultLaunchTarget = target
             try service.saveState(next)
-            refresh()
+            refresh(statusMessage: "Saved default launch")
         } catch {
             status = error.localizedDescription
         }
@@ -197,7 +187,7 @@ final class HomeportModel: ObservableObject {
             next.preferences.defaultClonePreset = preset
             next.preferences.cloneOptions = .preset(preset)
             try service.saveState(next)
-            refresh()
+            refresh(statusMessage: "Saved copy preset")
         } catch {
             status = error.localizedDescription
         }
@@ -208,7 +198,7 @@ final class HomeportModel: ObservableObject {
             var next = try service.loadState()
             next.preferences.launchTemporaryByDefault = value
             try service.saveState(next)
-            refresh()
+            refresh(statusMessage: "Saved default home")
         } catch {
             status = error.localizedDescription
         }
@@ -219,7 +209,7 @@ final class HomeportModel: ObservableObject {
             var next = try service.loadState()
             transform(&next.preferences.cloneOptions)
             try service.saveState(next)
-            refresh()
+            refresh(statusMessage: "Saved copy options")
         } catch {
             status = error.localizedDescription
         }
@@ -228,8 +218,7 @@ final class HomeportModel: ObservableObject {
     func resetDefaults() {
         do {
             try service.resetPreferences()
-            status = "Reset preferences"
-            refresh()
+            refresh(statusMessage: "Reset preferences")
         } catch {
             status = error.localizedDescription
         }
@@ -286,8 +275,6 @@ struct HomeportMenuView: View {
                 }
             }
 
-            PinnedMenuSection()
-
             RecentMenuSection()
 
             HomeLaunchSection()
@@ -295,8 +282,8 @@ struct HomeportMenuView: View {
             Divider()
 
             FormSection(
-                title: "2. Remember These Defaults",
-                help: "These settings control the big blue button and new copied homes."
+                title: "2. Defaults",
+                help: "Change what the blue button does."
             ) {
                 QuickOptions()
             }
@@ -305,7 +292,7 @@ struct HomeportMenuView: View {
 
             FormSection(
                 title: "3. Make a New Home",
-                help: "A home is a separate Codex state folder. Main is left alone."
+                help: "New homes appear in Your Homes above."
             ) {
                 CreateHomeSection()
             }
@@ -409,20 +396,18 @@ struct RecentMenuSection: View {
     @EnvironmentObject var model: HomeportModel
 
     var body: some View {
-        if !model.recentInstances.isEmpty {
+        if let instance = model.recentInstances.first {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Recents")
+                Text("Last Opened")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                ForEach(model.recentInstances.prefix(3)) { instance in
-                    CompactLaunchRow(
-                        title: instance.homeName,
-                        subtitle: "\(instance.target.rawValue) • \(relativeTime(instance.launchedAt))",
-                        symbol: instance.target == .desktop ? "macwindow" : "terminal",
-                        target: instance.target
-                    ) {
-                        model.launchRecent(instance)
-                    }
+                CompactLaunchRow(
+                    title: instance.homeName,
+                    subtitle: "\(instance.target.rawValue) • \(relativeTime(instance.launchedAt))",
+                    symbol: instance.target == .desktop ? "macwindow" : "terminal",
+                    target: instance.target
+                ) {
+                    model.launchRecent(instance)
                 }
             }
         }
@@ -438,18 +423,22 @@ struct RecentMenuSection: View {
 struct HomeLaunchSection: View {
     @EnvironmentObject var model: HomeportModel
 
+    private var managedHomes: [CodexHome] {
+        model.state.homes.filter { $0.kind != .main }
+    }
+
     var body: some View {
-        if !model.state.homes.isEmpty {
+        if !managedHomes.isEmpty {
             FormSection(
                 title: "Your Homes",
-                help: "New homes show up here. Press a row to open that home."
+                help: "Press a row to open one of the homes you created."
             ) {
                 VStack(spacing: 6) {
-                    ForEach(model.state.homes.prefix(5)) { home in
+                    ForEach(managedHomes.prefix(4)) { home in
                         HomeLaunchRow(home: home)
                     }
-                    if model.state.homes.count > 5 {
-                        Text("Open Console to see all \(model.state.homes.count) homes.")
+                    if managedHomes.count > 4 {
+                        Text("Open Console to see all \(managedHomes.count) created homes.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -650,7 +639,7 @@ struct CreateHomeSection: View {
         VStack(alignment: .leading, spacing: 6) {
             CreateHomeButton(
                 title: "Make a saved copy of my current setup",
-                subtitle: "Copies the checked items below into a new home",
+                subtitle: "Uses the copy preset selected above",
                 symbol: "square.on.square"
             ) {
                 model.cloneWorkingSetup()
@@ -759,44 +748,38 @@ struct QuickOptions: View {
     @EnvironmentObject var model: HomeportModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("When I press the big blue button, open:")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Picker("Default", selection: Binding(
-                    get: { model.state.preferences.defaultLaunchTarget },
-                    set: { model.setDefaultLaunchTarget($0) }
-                )) {
-                    Text("Desktop App").tag(LaunchTarget.desktop)
-                    Text("Terminal").tag(LaunchTarget.terminal)
-                }
-                .pickerStyle(.segmented)
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Open main in", selection: Binding(
+                get: { model.state.preferences.defaultLaunchTarget },
+                set: { model.setDefaultLaunchTarget($0) }
+            )) {
+                Text("Desktop App").tag(LaunchTarget.desktop)
+                Text("Terminal").tag(LaunchTarget.terminal)
             }
+            .pickerStyle(.segmented)
 
             Toggle("Prefer temporary launches", isOn: Binding(
                 get: { model.state.preferences.launchTemporaryByDefault },
                 set: { model.setLaunchTemporaryByDefault($0) }
             ))
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("When I copy my setup, start from:")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Picker("Clone", selection: Binding(
-                    get: { model.state.preferences.defaultClonePreset },
-                    set: { model.setDefaultClonePreset($0) }
-                )) {
-                    ForEach(ClonePreset.allCases, id: \.self) { preset in
-                        Text(preset.displayName).tag(preset)
-                    }
+            Picker("Copy preset", selection: Binding(
+                get: { model.state.preferences.defaultClonePreset },
+                set: { model.setDefaultClonePreset($0) }
+            )) {
+                ForEach(ClonePreset.allCases, id: \.self) { preset in
+                    Text(preset.displayName).tag(preset)
                 }
             }
 
-            CloneIncludeToggles()
-
-            Button("Reset Options") {
-                model.resetDefaults()
+            HStack {
+                Text("Detailed copy checkboxes are in Console.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Reset") {
+                    model.resetDefaults()
+                }
             }
         }
     }
@@ -887,6 +870,7 @@ struct HomeportConsoleView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     ConsoleHeader()
+                    ConsoleCopySettings()
                     PinnedConsoleSection()
                     RecentConsoleSection()
                     HomeGrid()
@@ -896,6 +880,31 @@ struct HomeportConsoleView: View {
                 .padding(24)
             }
         }
+    }
+}
+
+struct ConsoleCopySettings: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Copy Settings")
+                .font(.title2.weight(.semibold))
+            Text("These options control what “Make a saved copy of my current setup” includes.")
+                .foregroundStyle(.secondary)
+            Picker("Copy preset", selection: Binding(
+                get: { model.state.preferences.defaultClonePreset },
+                set: { model.setDefaultClonePreset($0) }
+            )) {
+                ForEach(ClonePreset.allCases, id: \.self) { preset in
+                    Text(preset.displayName).tag(preset)
+                }
+            }
+            .frame(maxWidth: 360)
+            CloneIncludeToggles()
+        }
+        .padding(14)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
