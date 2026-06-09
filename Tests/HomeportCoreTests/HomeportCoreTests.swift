@@ -197,6 +197,23 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertFalse(installing.updateAvailable(currentVersion: "0.3.0"))
     }
 
+    func testDevChannelUsesSeparateHomeportStateAndManagedHomes() throws {
+        let root = try makeTempRoot()
+        let live = HomeportPaths(homeDirectory: root, channel: .live)
+        let dev = HomeportPaths(homeDirectory: root, channel: .dev)
+
+        XCTAssertEqual(live.appSupportDirectory.lastPathComponent, "CodexHomeport")
+        XCTAssertEqual(dev.appSupportDirectory.lastPathComponent, "CodexHomeportDev")
+        XCTAssertEqual(live.managedHomesDirectory.lastPathComponent, ".codex-homes")
+        XCTAssertEqual(dev.managedHomesDirectory.lastPathComponent, ".codex-homes-dev")
+        XCTAssertNotEqual(live.stateFile.path, dev.stateFile.path)
+    }
+
+    func testChannelReadsEnvironmentBeforeBundleDefault() {
+        XCTAssertEqual(HomeportChannel.current(environment: ["HOMEPORT_CHANNEL": "dev"], bundle: .main), .dev)
+        XCTAssertEqual(HomeportChannel.current(environment: ["HOMEPORT_CHANNEL": "live"], bundle: .main), .live)
+    }
+
     private func makeTempRoot() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

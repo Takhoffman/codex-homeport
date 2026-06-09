@@ -364,7 +364,7 @@ public final class HomeportService: @unchecked Sendable {
         npm install -g codex-homeport@latest
         package_root="$(npm root -g)/codex-homeport"
         test -f "$package_root/Package.swift"
-        homeport update --with-app --no-restart --repo "$package_root"
+        homeport update --with-app --no-restart --repo "$package_root" --channel \(paths.channel.rawValue)
         """
         let shellCommand = "nohup /bin/zsh -lc \(shellQuote(command)) >> \(shellQuote(paths.updateLogFile.path)) 2>&1 &"
         let process = Process()

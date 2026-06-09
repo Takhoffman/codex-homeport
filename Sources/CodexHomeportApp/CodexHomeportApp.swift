@@ -11,7 +11,7 @@ struct CodexHomeportApp: App {
                 .environmentObject(model)
                 .frame(width: 390)
         } label: {
-            MenuBarBadgeIcon(symbol: model.menuIcon, showsBadge: model.updateAvailable)
+            MenuBarBadgeIcon(title: model.channel.appName, symbol: model.menuIcon, showsBadge: model.updateAvailable)
         }
         .menuBarExtraStyle(.window)
 
@@ -24,20 +24,25 @@ struct CodexHomeportApp: App {
 }
 
 struct MenuBarBadgeIcon: View {
+    var title: String
     var symbol: String
     var showsBadge: Bool
 
     var body: some View {
-        Image(systemName: symbol)
-            .overlay(alignment: .topTrailing) {
-                if showsBadge {
-                    Circle()
-                        .fill(.red)
-                        .frame(width: 6, height: 6)
-                        .offset(x: 3, y: -3)
-                }
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: symbol)
+                .overlay(alignment: .topTrailing) {
+                    if showsBadge {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 6, height: 6)
+                            .offset(x: 3, y: -3)
+                    }
             }
-            .help(showsBadge ? "Codex Homeport update available" : "Codex Homeport")
+        }
+        .help(showsBadge ? "\(title) update available" : title)
     }
 }
 
@@ -50,8 +55,12 @@ final class HomeportModel: ObservableObject {
     @Published var isCheckingForUpdates = false
     @Published var isInstallingUpdate = false
 
-    let service = HomeportService()
+    let service: HomeportService
     private var updateMonitorTask: Task<Void, Never>?
+
+    var channel: HomeportChannel {
+        service.paths.channel
+    }
 
     var menuIcon: String {
         report.globalCodexHome == nil && report.suspiciousLaunchers.isEmpty ? "sailboat" : "exclamationmark.triangle"
@@ -72,6 +81,7 @@ final class HomeportModel: ObservableObject {
     }
 
     init() {
+        self.service = HomeportService()
         refresh()
         startUpdateMonitor()
     }

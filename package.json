@@ -1,6 +1,6 @@
 {
   "name": "codex-homeport",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A macOS menu bar launcher and hygiene tool for managing multiple Codex homes.",
   "license": "MIT",
   "homepage": "https://github.com/Takhoffman/codex-homeport#readme",

@@ -1,8 +1,9 @@
 import Foundation
 import HomeportCore
 
-let service = HomeportService()
 let arguments = Array(CommandLine.arguments.dropFirst())
+let cliChannel = HomeportChannel.current()
+let service = HomeportService(paths: HomeportPaths(channel: cliChannel))
 
 do {
     try run(arguments)
@@ -281,8 +282,9 @@ func install(_ arguments: [String]) throws {
     let installDirectory = URL(fileURLWithPath: option(arguments, "--prefix") ?? "\(NSHomeDirectory())/bin")
     let includeApp = arguments.contains("--with-app")
     let appDirectory = URL(fileURLWithPath: option(arguments, "--app-dir") ?? "\(NSHomeDirectory())/Applications")
+    let channel = try channel(from: arguments)
 
-    print("Installing Codex Homeport \(AppVersion.version) from \(repo.path)")
+    print("Installing \(channel.appName) \(AppVersion.version) from \(repo.path)")
     try runProcess("swift", ["build", "--package-path", repo.path, "-c", "release", "--product", "homeport"])
     try FileManager.default.createDirectory(at: installDirectory, withIntermediateDirectories: true)
 
@@ -296,8 +298,8 @@ func install(_ arguments: [String]) throws {
     print("Installed CLI: \(installedCLI.path)")
 
     if includeApp {
-        let appPath = try buildAppBundle(repo: repo)
-        let installedApp = try installAppBundle(appPath, appDirectory: appDirectory)
+        let appPath = try buildAppBundle(repo: repo, channel: channel)
+        let installedApp = try installAppBundle(appPath, appDirectory: appDirectory, channel: channel)
         print("Installed app bundle: \(installedApp.path)")
     }
 }
@@ -305,9 +307,10 @@ func install(_ arguments: [String]) throws {
 func update(_ arguments: [String]) throws {
     let repo = try packageRoot(from: option(arguments, "--repo"))
     let skipPull = arguments.contains("--no-pull")
-    let appPath = installedAppPath(arguments)
+    let appPath = try installedAppPath(arguments)
+    let channel = try channel(from: arguments)
     let shouldInstallApp = arguments.contains("--with-app") || FileManager.default.fileExists(atPath: appPath.path)
-    let shouldRestart = shouldInstallApp && !arguments.contains("--no-restart") && isHomeportAppRunning()
+    let shouldRestart = shouldInstallApp && !arguments.contains("--no-restart") && isHomeportAppRunning(channel: channel)
 
     if !skipPull, FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git").path) {
         print("Updating source repo: \(repo.path)")
@@ -329,15 +332,15 @@ func update(_ arguments: [String]) throws {
     }
 }
 
-func buildAppBundle(repo: URL) throws -> URL {
-    let app = repo.appendingPathComponent("dist/Codex Homeport.app")
+func buildAppBundle(repo: URL, channel: HomeportChannel) throws -> URL {
+    let app = repo.appendingPathComponent("dist/\(channel.appBundleName)")
     let macOS = app.appendingPathComponent("Contents/MacOS")
     try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: app.appendingPathComponent("Contents/Resources"), withIntermediateDirectories: true)
 
     try runProcess("swift", ["build", "--package-path", repo.path, "-c", "release", "--product", "CodexHomeportApp"])
     let builtApp = repo.appendingPathComponent(".build/release/CodexHomeportApp")
-    let executable = macOS.appendingPathComponent("Codex Homeport")
+    let executable = macOS.appendingPathComponent(channel.appName)
     if FileManager.default.fileExists(atPath: executable.path) {
         try trash(executable)
     }
@@ -350,13 +353,13 @@ func buildAppBundle(repo: URL) throws -> URL {
     <plist version="1.0">
     <dict>
       <key>CFBundleExecutable</key>
-      <string>Codex Homeport</string>
+      <string>\(xmlEscape(channel.appName))</string>
       <key>CFBundleIdentifier</key>
-      <string>com.takhoffman.codex-homeport</string>
+      <string>\(channel.bundleIdentifier)</string>
       <key>CFBundleName</key>
-      <string>Codex Homeport</string>
+      <string>\(xmlEscape(channel.appName))</string>
       <key>CFBundleDisplayName</key>
-      <string>Codex Homeport</string>
+      <string>\(xmlEscape(channel.appName))</string>
       <key>CFBundlePackageType</key>
       <string>APPL</string>
       <key>CFBundleShortVersionString</key>
@@ -367,6 +370,8 @@ func buildAppBundle(repo: URL) throws -> URL {
       <string>13.0</string>
       <key>LSUIElement</key>
       <true/>
+      <key>HomeportChannel</key>
+      <string>\(channel.rawValue)</string>
     </dict>
     </plist>
     """
@@ -374,9 +379,9 @@ func buildAppBundle(repo: URL) throws -> URL {
     return app
 }
 
-func installAppBundle(_ builtApp: URL, appDirectory: URL) throws -> URL {
+func installAppBundle(_ builtApp: URL, appDirectory: URL, channel: HomeportChannel) throws -> URL {
     try FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
-    let installedApp = appDirectory.appendingPathComponent("Codex Homeport.app")
+    let installedApp = appDirectory.appendingPathComponent(channel.appBundleName)
     if FileManager.default.fileExists(atPath: installedApp.path) {
         try trash(installedApp)
     }
@@ -385,16 +390,18 @@ func installAppBundle(_ builtApp: URL, appDirectory: URL) throws -> URL {
 }
 
 func start(_ arguments: [String]) throws {
-    let appPath = installedAppPath(arguments)
+    let appPath = try installedAppPath(arguments)
+    let channel = try channel(from: arguments)
     guard FileManager.default.fileExists(atPath: appPath.path) else {
-        throw HomeportError.commandFailed("Codex Homeport.app was not found at \(appPath.path). Run homeport install --with-app first.")
+        throw HomeportError.commandFailed("\(channel.appBundleName) was not found at \(appPath.path). Run homeport install --with-app first.")
     }
     try runProcess("open", [appPath.path])
-    print("Started Codex Homeport: \(appPath.path)")
+    print("Started \(channel.appName): \(appPath.path)")
 }
 
 func restart(_ arguments: [String]) throws {
-    try runProcess("pkill", ["-f", "Codex Homeport.app/Contents/MacOS/Codex Homeport"], allowFailure: true)
+    let channel = try channel(from: arguments)
+    try runProcess("pkill", ["-f", "\(channel.appBundleName)/Contents/MacOS/\(channel.appName)"], allowFailure: true)
     Thread.sleep(forTimeInterval: 0.5)
     try start(arguments)
 }
@@ -403,33 +410,38 @@ func autostart(_ arguments: [String]) throws {
     let action = arguments.first ?? "status"
     switch action {
     case "enable", "on":
-        let appPath = installedAppPath(arguments)
+        let appPath = try installedAppPath(arguments)
+        let channel = try channel(from: arguments)
         guard FileManager.default.fileExists(atPath: appPath.path) else {
-            throw HomeportError.commandFailed("Codex Homeport.app was not found at \(appPath.path). Run homeport install --with-app first.")
+            throw HomeportError.commandFailed("\(channel.appBundleName) was not found at \(appPath.path). Run homeport install --with-app first.")
         }
-        try writeLaunchAgent(appPath: appPath)
-        try runProcess("launchctl", ["unload", launchAgentPlist().path], allowFailure: true)
-        try runProcess("launchctl", ["load", launchAgentPlist().path])
+        try writeLaunchAgent(appPath: appPath, channel: channel)
+        try runProcess("launchctl", ["unload", launchAgentPlist(channel: channel).path], allowFailure: true)
+        try runProcess("launchctl", ["load", launchAgentPlist(channel: channel).path])
         print("Autostart enabled.")
     case "disable", "off":
-        try runProcess("launchctl", ["unload", launchAgentPlist().path], allowFailure: true)
-        if FileManager.default.fileExists(atPath: launchAgentPlist().path) {
-            try trash(launchAgentPlist())
+        let channel = try channel(from: arguments)
+        try runProcess("launchctl", ["unload", launchAgentPlist(channel: channel).path], allowFailure: true)
+        if FileManager.default.fileExists(atPath: launchAgentPlist(channel: channel).path) {
+            try trash(launchAgentPlist(channel: channel))
         }
         print("Autostart disabled.")
     case "status":
-        if FileManager.default.fileExists(atPath: launchAgentPlist().path) {
-            print("Autostart: enabled")
-            print("plist: \(launchAgentPlist().path)")
+        let channel = try channel(from: arguments)
+        let plistURL = launchAgentPlist(channel: channel)
+        if FileManager.default.fileExists(atPath: plistURL.path) {
+            print("Autostart (\(channel.rawValue)): enabled")
         } else {
-            print("Autostart: disabled")
+            print("Autostart (\(channel.rawValue)): disabled")
         }
+        print("plist: \(plistURL.path)")
     default:
         throw HomeportError.unsupportedCommand("autostart \(action)")
     }
 }
 
 func configure(_ arguments: [String]) throws {
+    let selectedChannel = try channel(from: arguments)
     if arguments.contains("--reset") {
         try service.resetPreferences()
         print("Reset Homeport preferences to defaults.")
@@ -548,7 +560,7 @@ func configure(_ arguments: [String]) throws {
         print("Update checks enabled: \(state.preferences.autoUpdateChecksEnabled)")
         print("Update interval: \(state.preferences.updateCheckInterval.rawValue)")
         print("Auto-install updates: \(state.preferences.autoInstallUpdates)")
-        try autostart(["status"])
+        try autostart(["status", "--channel", selectedChannel.rawValue])
     }
 }
 
@@ -558,21 +570,23 @@ func onboard(_ arguments: [String]) throws {
     let appDir = option(arguments, "--app-dir") ?? "\(NSHomeDirectory())/Applications"
     let terminal = option(arguments, "--terminal") ?? "terminal"
     let workspace = option(arguments, "--workspace") ?? FileManager.default.currentDirectoryPath
+    let channel = try channel(from: arguments)
 
-    try install(["--repo", repo.path, "--prefix", prefix, "--with-app", "--app-dir", appDir])
-    try configure(["--terminal", terminal, "--workspace", workspace, "--autostart", "on", "--app-dir", appDir])
-    try start(["--app-dir", appDir])
+    let channelArguments = ["--channel", channel.rawValue]
+    try install(["--repo", repo.path, "--prefix", prefix, "--with-app", "--app-dir", appDir] + channelArguments)
+    try configure(["--terminal", terminal, "--workspace", workspace, "--autostart", "on", "--app-dir", appDir] + channelArguments)
+    try start(["--app-dir", appDir] + channelArguments)
     print("Onboarding complete.")
 }
 
 func uninstall(_ arguments: [String]) throws {
-    let appPath = installedAppPath(arguments)
+    let appPath = try installedAppPath(arguments)
     let removeCLI = arguments.contains("--remove-cli")
     let removeState = arguments.contains("--remove-state")
     let removeManagedHomes = arguments.contains("--remove-managed-homes")
     let cliPath = URL(fileURLWithPath: option(arguments, "--cli") ?? "\(NSHomeDirectory())/bin/homeport")
 
-    try autostart(["disable"])
+    try autostart(["disable", "--channel", try channel(from: arguments).rawValue])
 
     if FileManager.default.fileExists(atPath: appPath.path) {
         try trash(appPath)
@@ -620,15 +634,15 @@ func trash(_ url: URL) throws {
     try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
 }
 
-func installedAppPath(_ arguments: [String]) -> URL {
+func installedAppPath(_ arguments: [String]) throws -> URL {
     let appDirectory = URL(fileURLWithPath: option(arguments, "--app-dir") ?? "\(NSHomeDirectory())/Applications")
-    return appDirectory.appendingPathComponent("Codex Homeport.app")
+    return appDirectory.appendingPathComponent(try channel(from: arguments).appBundleName)
 }
 
-func isHomeportAppRunning() -> Bool {
+func isHomeportAppRunning(channel: HomeportChannel = cliChannel) -> Bool {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["pgrep", "-f", "Codex Homeport.app/Contents/MacOS/Codex Homeport"]
+    process.arguments = ["pgrep", "-f", "\(channel.appBundleName)/Contents/MacOS/\(channel.appName)"]
     process.standardOutput = Pipe()
     process.standardError = Pipe()
     do {
@@ -640,12 +654,13 @@ func isHomeportAppRunning() -> Bool {
     }
 }
 
-func launchAgentPlist() -> URL {
-    URL(fileURLWithPath: "\(NSHomeDirectory())/Library/LaunchAgents/com.takhoffman.codex-homeport.plist")
+func launchAgentPlist(channel: HomeportChannel = cliChannel) -> URL {
+    URL(fileURLWithPath: "\(NSHomeDirectory())/Library/LaunchAgents/\(channel.bundleIdentifier).plist")
 }
 
-func writeLaunchAgent(appPath: URL) throws {
-    let plistURL = launchAgentPlist()
+func writeLaunchAgent(appPath: URL, channel: HomeportChannel) throws {
+    let plistURL = launchAgentPlist(channel: channel)
+    let executable = appPath.appendingPathComponent("Contents/MacOS/\(channel.appName)")
     try FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     let plist = """
     <?xml version="1.0" encoding="UTF-8"?>
@@ -653,11 +668,12 @@ func writeLaunchAgent(appPath: URL) throws {
     <plist version="1.0">
     <dict>
       <key>Label</key>
-      <string>com.takhoffman.codex-homeport</string>
+      <string>\(channel.bundleIdentifier)</string>
       <key>ProgramArguments</key>
       <array>
-        <string>/usr/bin/open</string>
-        <string>\(xmlEscape(appPath.path))</string>
+        <string>/usr/bin/env</string>
+        <string>HOMEPORT_CHANNEL=\(channel.rawValue)</string>
+        <string>\(xmlEscape(executable.path))</string>
       </array>
       <key>RunAtLoad</key>
       <true/>
@@ -715,6 +731,16 @@ func runProcess(_ executable: String, _ arguments: [String], allowFailure: Bool 
     if process.terminationStatus != 0 && !allowFailure {
         throw HomeportError.commandFailed("\(executable) \(arguments.joined(separator: " ")) exited with \(process.terminationStatus)")
     }
+}
+
+func channel(from arguments: [String]) throws -> HomeportChannel {
+    if let value = option(arguments, "--channel") {
+        guard let channel = HomeportChannel(rawValue: value) else {
+            throw HomeportError.commandFailed("Unknown --channel value: \(value)")
+        }
+        return channel
+    }
+    return HomeportChannel.current()
 }
 
 func option(_ arguments: [String], _ name: String) -> String? {
@@ -1098,17 +1124,20 @@ homeport install
 Build and install Homeport from a source checkout.
 
 Usage:
-  homeport install [--prefix PATH] [--with-app] [--app-dir PATH] [--repo PATH]
+  homeport install [--prefix PATH] [--with-app] [--app-dir PATH] [--repo PATH] [--channel live|dev]
 
 Options:
   --prefix PATH     CLI install directory. Default: ~/bin
   --with-app        Also build and install the menu bar app.
   --app-dir PATH    App install directory. Default: ~/Applications
   --repo PATH       Source repo path. Usually auto-detected.
+  --channel live|dev
+                   App/state channel. Default: live.
 
 Examples:
   homeport install
   homeport install --with-app
+  homeport install --with-app --channel dev
   homeport install --prefix ~/.local/bin --with-app --app-dir /Applications
 """ }
 
@@ -1119,16 +1148,19 @@ Fast-forward the source repo, reinstall Homeport, and restart the menu bar app
 when it is already installed and running.
 
 Usage:
-  homeport update [--prefix PATH] [--with-app] [--app-dir PATH] [--repo PATH] [--no-pull]
+  homeport update [--prefix PATH] [--with-app] [--app-dir PATH] [--repo PATH] [--channel live|dev] [--no-pull]
 
 Options:
   --with-app      Install the menu bar app. This is automatic when the app exists.
+  --channel live|dev
+                  App/state channel. Default: live.
   --no-pull       Skip git pull and rebuild from the current checkout.
   --no-restart    Reinstall without restarting a running menu bar app.
 
 Examples:
   homeport update
   homeport update --with-app
+  homeport update --with-app --channel dev
   homeport update --no-pull --with-app
 """ }
 
@@ -1148,10 +1180,11 @@ homeport start
 Open the installed Codex Homeport menu bar app.
 
 Usage:
-  homeport start [--app-dir PATH]
+  homeport start [--app-dir PATH] [--channel live|dev]
 
 Examples:
   homeport start
+  homeport start --channel dev
   homeport start --app-dir ~/Applications
 """ }
 
@@ -1162,10 +1195,11 @@ Quit any running Codex Homeport menu bar process and reopen the installed app.
 Use this after reinstalling so macOS does not keep an older menu bar build alive.
 
 Usage:
-  homeport restart [--app-dir PATH]
+  homeport restart [--app-dir PATH] [--channel live|dev]
 
 Examples:
   homeport restart
+  homeport restart --channel dev
   homeport restart --app-dir ~/Applications
 """ }
 
@@ -1175,15 +1209,17 @@ homeport autostart
 Manage the user LaunchAgent that opens Codex Homeport at login.
 
 Usage:
-  homeport autostart enable [--app-dir PATH]
-  homeport autostart disable
-  homeport autostart status
+  homeport autostart enable [--app-dir PATH] [--channel live|dev]
+  homeport autostart disable [--channel live|dev]
+  homeport autostart status [--channel live|dev]
 
 Files:
   ~/Library/LaunchAgents/com.takhoffman.codex-homeport.plist
+  ~/Library/LaunchAgents/com.takhoffman.codex-homeport.dev.plist
 
 Examples:
   homeport autostart enable
+  homeport autostart enable --channel dev
   homeport autostart status
   homeport autostart disable
 """ }
@@ -1198,6 +1234,7 @@ Usage:
 
 Options:
   --terminal terminal|iTerm             Preferred terminal for terminal launches.
+  --channel live|dev                    State/app channel. Default: live.
   --workspace PATH                      Default workspace path.
   --launch-target desktop|terminal      Default launch target.
   --clone-preset PRESET                 Default clone preset.
@@ -1214,6 +1251,7 @@ Options:
 
 Examples:
   homeport configure --show
+  homeport configure --channel dev --show
   homeport configure --terminal iTerm
   homeport configure --workspace ~/github.com/Takhoffman/codex-homeport
   homeport configure --launch-target terminal
@@ -1259,12 +1297,14 @@ Options:
   --remove-cli                Also remove the installed CLI.
   --cli PATH                  CLI path to remove. Default: ~/bin/homeport
   --remove-state              Remove Homeport app state.
-  --remove-managed-homes      Remove ~/.codex-homes.
+  --remove-managed-homes      Remove the channel managed homes directory.
+  --channel live|dev          App/state channel. Default: live.
 
 Examples:
   homeport uninstall
   homeport uninstall --remove-cli --remove-state
   homeport uninstall --remove-managed-homes
+  homeport uninstall --channel dev --remove-state
 
 Safety:
   Homeport never removes your main ~/.codex home. Managed homes are only removed

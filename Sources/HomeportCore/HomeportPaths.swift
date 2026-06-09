@@ -1,10 +1,66 @@
 import Foundation
 
+public enum HomeportChannel: String, Codable, CaseIterable, Sendable {
+    case live
+    case dev
+
+    public var appName: String {
+        switch self {
+        case .live: "Codex Homeport"
+        case .dev: "Codex Homeport Dev"
+        }
+    }
+
+    public var appBundleName: String {
+        "\(appName).app"
+    }
+
+    public var bundleIdentifier: String {
+        switch self {
+        case .live: "com.takhoffman.codex-homeport"
+        case .dev: "com.takhoffman.codex-homeport.dev"
+        }
+    }
+
+    public var appSupportName: String {
+        switch self {
+        case .live: "CodexHomeport"
+        case .dev: "CodexHomeportDev"
+        }
+    }
+
+    public var managedHomesName: String {
+        switch self {
+        case .live: ".codex-homes"
+        case .dev: ".codex-homes-dev"
+        }
+    }
+
+    public static func current(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        bundle: Bundle = .main
+    ) -> HomeportChannel {
+        if let raw = environment["HOMEPORT_CHANNEL"], let channel = HomeportChannel(rawValue: raw) {
+            return channel
+        }
+        if let raw = bundle.object(forInfoDictionaryKey: "HomeportChannel") as? String,
+           let channel = HomeportChannel(rawValue: raw) {
+            return channel
+        }
+        return .live
+    }
+}
+
 public struct HomeportPaths: Sendable {
     public let homeDirectory: URL
+    public let channel: HomeportChannel
 
-    public init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
+    public init(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        channel: HomeportChannel = .current()
+    ) {
         self.homeDirectory = homeDirectory
+        self.channel = channel
     }
 
     public var mainCodexHome: URL {
@@ -12,14 +68,14 @@ public struct HomeportPaths: Sendable {
     }
 
     public var managedHomesDirectory: URL {
-        homeDirectory.appendingPathComponent(".codex-homes", isDirectory: true)
+        homeDirectory.appendingPathComponent(channel.managedHomesName, isDirectory: true)
     }
 
     public var appSupportDirectory: URL {
         homeDirectory
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("CodexHomeport", isDirectory: true)
+            .appendingPathComponent(channel.appSupportName, isDirectory: true)
     }
 
     public var profilesDirectory: URL {

@@ -12,6 +12,8 @@ It can launch Codex as the desktop app or in a terminal session while setting `C
 - Managed homes: `~/.codex-homes/<slug>`
 - Managed desktop profiles: `~/Library/Application Support/CodexHomeport/Profiles/<slug>`
 - Homeport state: `~/Library/Application Support/CodexHomeport/homeport.json`
+- Dev-channel managed homes: `~/.codex-homes-dev/<slug>`
+- Dev-channel state: `~/Library/Application Support/CodexHomeportDev/homeport.json`
 
 ## Launch Modes
 
@@ -51,6 +53,19 @@ swift run CodexHomeportApp
 ```
 
 The menu bar app provides quick launch buttons, diagnostics, clone creation, clean-room creation, and cleanup review.
+
+To run a dev menu bar app beside the live app:
+
+```sh
+homeport install --with-app --channel dev
+homeport start --channel dev
+HOMEPORT_CHANNEL=dev swift run CodexHomeportApp
+```
+
+The dev channel installs as `Codex Homeport Dev.app`, uses bundle ID
+`com.takhoffman.codex-homeport.dev`, embeds its dev channel in the app bundle,
+writes its own LaunchAgent, and keeps Homeport state and managed homes separate
+from live. Use `HOMEPORT_CHANNEL=dev` only for `swift run` development.
 
 The menu keeps pinned homes and recent launches close at hand:
 
@@ -156,6 +171,7 @@ Configuration can be changed without reinstalling:
 
 ```sh
 homeport configure --terminal iTerm
+homeport configure --channel dev --show
 homeport configure --workspace "$PWD"
 homeport configure --launch-target terminal
 homeport configure --clone-preset config-only
