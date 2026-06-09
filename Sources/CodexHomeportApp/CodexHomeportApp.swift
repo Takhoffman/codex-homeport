@@ -503,6 +503,12 @@ struct CloneIncludeToggles: View {
             Text("Clone Includes")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                helperButton("Working", .workingSetup)
+                helperButton("Config", .configOnly)
+                helperButton("All", .allIncluded)
+                helperButton("None", .empty)
+            }
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 6) {
                 toggle("config", \.config)
                 toggle("auth", \.auth)
@@ -515,17 +521,36 @@ struct CloneIncludeToggles: View {
                 toggle("memories", \.memories)
                 toggle("browser", \.browserSupport)
                 toggle("sessions", \.sessionsAndLogs)
-                toggle("everything", \.everything)
+                toggle("everything", \.everything, expandsAll: true)
             }
         }
     }
 
-    private func toggle(_ label: String, _ keyPath: WritableKeyPath<CloneOptions, Bool>) -> some View {
+    private func helperButton(_ label: String, _ options: CloneOptions) -> some View {
+        Button(label) {
+            model.updateCloneOptions { current in
+                current = options
+            }
+        }
+        .font(.caption)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    private func toggle(
+        _ label: String,
+        _ keyPath: WritableKeyPath<CloneOptions, Bool>,
+        expandsAll: Bool = false
+    ) -> some View {
         Toggle(label, isOn: Binding(
             get: { model.state.preferences.cloneOptions[keyPath: keyPath] },
             set: { value in
                 model.updateCloneOptions { options in
-                    options[keyPath: keyPath] = value
+                    if expandsAll, value {
+                        options = .allIncluded
+                    } else {
+                        options[keyPath: keyPath] = value
+                    }
                 }
             }
         ))

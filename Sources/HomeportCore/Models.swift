@@ -295,6 +295,21 @@ public struct CloneOptions: Codable, Equatable, Sendable {
 
     public static let full = CloneOptions(everything: true)
 
+    public static let allIncluded = CloneOptions(
+        config: true,
+        auth: true,
+        skills: true,
+        plugins: true,
+        agents: true,
+        prompts: true,
+        rules: true,
+        profiles: true,
+        memories: true,
+        browserSupport: true,
+        sessionsAndLogs: true,
+        everything: true
+    )
+
     public static func preset(_ preset: ClonePreset) -> CloneOptions {
         switch preset {
         case .empty: .empty
