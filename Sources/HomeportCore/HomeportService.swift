@@ -48,8 +48,12 @@ public final class HomeportService: @unchecked Sendable {
     }
 
     public func clone(name: String, preset: ClonePreset) throws -> CodexHome {
+        try clone(name: name, preset: preset, options: .preset(preset))
+    }
+
+    public func clone(name: String, preset: ClonePreset, options: CloneOptions) throws -> CodexHome {
         let slug = uniqueSlug(base: slugify(name))
-        return try createManagedHome(name: name, slug: slug, kind: .clone, preset: preset, temporary: false)
+        return try createManagedHome(name: name, slug: slug, kind: .clone, preset: preset, options: options, temporary: false)
     }
 
     public func renameHome(id: UUID, name: String) throws {
@@ -195,6 +199,7 @@ public final class HomeportService: @unchecked Sendable {
         slug: String,
         kind: HomeKind,
         preset: ClonePreset,
+        options: CloneOptions? = nil,
         temporary: Bool
     ) throws -> CodexHome {
         try fileManager.createDirectory(at: paths.managedHomesDirectory, withIntermediateDirectories: true)
@@ -203,7 +208,7 @@ public final class HomeportService: @unchecked Sendable {
         let homeURL = paths.managedHomesDirectory.appendingPathComponent(slug, isDirectory: true)
         let profileURL = paths.profilesDirectory.appendingPathComponent(slug, isDirectory: true)
         let sourceURL = preset == .empty ? nil : paths.mainCodexHome
-        try copier.createHome(destination: homeURL, source: sourceURL, preset: preset)
+        try copier.createHome(destination: homeURL, source: sourceURL, options: options ?? .preset(preset))
         try fileManager.createDirectory(at: profileURL, withIntermediateDirectories: true)
 
         let home = CodexHome(

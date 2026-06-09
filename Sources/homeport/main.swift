@@ -140,8 +140,9 @@ func throwaway(_ arguments: [String]) throws {
 func clone(_ arguments: [String]) throws {
     let state = try service.loadState()
     let preset = option(arguments, "--preset").flatMap(ClonePreset.init(rawValue:)) ?? state.preferences.defaultClonePreset
+    let cloneOptions = cloneOptions(from: arguments, base: state.preferences.cloneOptions)
     let name = option(arguments, "--name") ?? arguments.first(where: { !$0.hasPrefix("--") }) ?? "Homeport Clone"
-    let home = try service.clone(name: name, preset: preset)
+    let home = try service.clone(name: name, preset: preset, options: cloneOptions)
     print("Created \(home.name)")
     print("slug=\(home.slug)")
     print("CODEX_HOME=\(home.homePath)")
@@ -159,7 +160,7 @@ func createHome(_ arguments: [String]) throws {
         home = try service.createTemporary(name: name)
     case "clone":
         let preset = option(arguments, "--preset").flatMap(ClonePreset.init(rawValue:)) ?? .workingSetup
-        home = try service.clone(name: name ?? "Homeport Clone", preset: preset)
+        home = try service.clone(name: name ?? "Homeport Clone", preset: preset, options: cloneOptions(from: arguments, base: .preset(preset)))
     default:
         throw HomeportError.unsupportedCommand("create \(kind)")
     }
@@ -429,8 +430,23 @@ func configure(_ arguments: [String]) throws {
     if let preset = option(arguments, "--clone-preset").flatMap(ClonePreset.init(rawValue:)) {
         var state = try service.loadState()
         state.preferences.defaultClonePreset = preset
+        state.preferences.cloneOptions = .preset(preset)
         try service.saveState(state)
         print("Default clone preset: \(preset.rawValue)")
+    }
+
+    if let include = option(arguments, "--clone-include") {
+        var state = try service.loadState()
+        state.preferences.cloneOptions = applyCloneList(include, to: state.preferences.cloneOptions, value: true)
+        try service.saveState(state)
+        print("Updated clone includes: \(include)")
+    }
+
+    if let exclude = option(arguments, "--clone-exclude") {
+        var state = try service.loadState()
+        state.preferences.cloneOptions = applyCloneList(exclude, to: state.preferences.cloneOptions, value: false)
+        try service.saveState(state)
+        print("Updated clone excludes: \(exclude)")
     }
 
     if let temporary = option(arguments, "--temporary") {
@@ -466,6 +482,7 @@ func configure(_ arguments: [String]) throws {
         print("Default workspace: \(state.lastWorkspacePath ?? FileManager.default.currentDirectoryPath)")
         print("Default launch target: \(state.preferences.defaultLaunchTarget.rawValue)")
         print("Default clone preset: \(state.preferences.defaultClonePreset.rawValue)")
+        print("Clone includes: \(cloneOptionSummary(state.preferences.cloneOptions))")
         print("Launch temporary by default: \(state.preferences.launchTemporaryByDefault)")
         print("Install app by default: \(state.preferences.installAppByDefault)")
         try autostart(["status"])
@@ -628,6 +645,64 @@ func option(_ arguments: [String], _ name: String) -> String? {
 
 func boolValue(_ value: String) -> Bool {
     ["1", "true", "yes", "on", "enable", "enabled"].contains(value.lowercased())
+}
+
+func cloneOptions(from arguments: [String], base: CloneOptions) -> CloneOptions {
+    var options = base
+    if let include = option(arguments, "--include") {
+        options = applyCloneList(include, to: options, value: true)
+    }
+    if let exclude = option(arguments, "--exclude") {
+        options = applyCloneList(exclude, to: options, value: false)
+    }
+    return options
+}
+
+func applyCloneList(_ list: String, to options: CloneOptions, value: Bool) -> CloneOptions {
+    var next = options
+    for rawToken in list.split(separator: ",").map({ String($0).trimmingCharacters(in: .whitespacesAndNewlines) }) {
+        switch rawToken {
+        case "config", "config.toml": next.config = value
+        case "auth": next.auth = value
+        case "skills": next.skills = value
+        case "plugins": next.plugins = value
+        case "agents": next.agents = value
+        case "prompts": next.prompts = value
+        case "rules": next.rules = value
+        case "profiles": next.profiles = value
+        case "memories": next.memories = value
+        case "browser", "chrome", "browser-support": next.browserSupport = value
+        case "sessions", "logs", "history": next.sessionsAndLogs = value
+        case "everything": next.everything = value
+        case "all":
+            next = value ? .full : .empty
+        default:
+            continue
+        }
+    }
+    if next.everything && !value {
+        next.everything = false
+    }
+    return next
+}
+
+func cloneOptionSummary(_ options: CloneOptions) -> String {
+    if options.everything {
+        return "everything"
+    }
+    var parts: [String] = []
+    if options.config { parts.append("config") }
+    if options.auth { parts.append("auth") }
+    if options.skills { parts.append("skills") }
+    if options.plugins { parts.append("plugins") }
+    if options.agents { parts.append("agents") }
+    if options.prompts { parts.append("prompts") }
+    if options.rules { parts.append("rules") }
+    if options.profiles { parts.append("profiles") }
+    if options.memories { parts.append("memories") }
+    if options.browserSupport { parts.append("browser") }
+    if options.sessionsAndLogs { parts.append("sessions") }
+    return parts.isEmpty ? "nothing" : parts.joined(separator: ",")
 }
 
 func printHelp(topic: String? = nil) {
@@ -793,7 +868,7 @@ homeport clone
 Create a named managed Codex home under ~/.codex-homes.
 
 Usage:
-  homeport clone --preset working-setup|config-only|everything|empty --name NAME
+  homeport clone --preset working-setup|config-only|everything|empty --name NAME [--include LIST] [--exclude LIST]
 
 Presets:
   working-setup   Config, auth, skills, plugins, MCP-related files; no sessions/logs.
@@ -805,6 +880,11 @@ Examples:
   homeport clone --preset working-setup --name "Plugin Lab"
   homeport clone --preset config-only --name "No Auth Test"
   homeport clone --preset empty --name "Blank Slate"
+  homeport clone --name "Skills Only" --include skills,plugins --exclude auth,memories,browser
+
+Clone categories:
+  config, auth, skills, plugins, agents, prompts, rules, profiles, memories,
+  browser, sessions, everything, all
 """ }
 
 func createHelp() -> String { """
@@ -998,6 +1078,8 @@ Options:
   --workspace PATH                      Default workspace path.
   --launch-target desktop|terminal      Default launch target.
   --clone-preset PRESET                 Default clone preset.
+  --clone-include LIST                  Remember clone categories to include.
+  --clone-exclude LIST                  Remember clone categories to exclude.
   --temporary on|off                    Prefer temporary launch mode in UI.
   --install-app on|off                  Default whether onboarding installs app.
   --autostart on|off|status             Manage login autostart.
@@ -1010,6 +1092,8 @@ Examples:
   homeport configure --workspace ~/github.com/Takhoffman/codex-homeport
   homeport configure --launch-target terminal
   homeport configure --clone-preset config-only
+  homeport configure --clone-include config,skills,plugins
+  homeport configure --clone-exclude auth,sessions
   homeport configure --reset
   homeport configure --autostart on
 """ }

@@ -41,6 +41,7 @@ swift run homeport install --with-app
 swift run homeport update --with-app
 swift run homeport onboard
 swift run homeport uninstall
+swift run homeport clone --name "Skills Lab" --include config,skills,plugins --exclude auth,sessions
 ```
 
 ## Menu Bar App
@@ -97,6 +98,8 @@ homeport configure --terminal iTerm
 homeport configure --workspace "$PWD"
 homeport configure --launch-target terminal
 homeport configure --clone-preset config-only
+homeport configure --clone-include config,skills,plugins
+homeport configure --clone-exclude auth,sessions
 homeport configure --temporary on
 homeport configure --autostart on
 homeport configure --show

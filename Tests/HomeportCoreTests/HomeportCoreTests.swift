@@ -43,6 +43,39 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("session_index.jsonl").path))
     }
 
+    func testCustomCloneOptionsCopySelectedCategoriesOnly() throws {
+        let root = try makeTempRoot()
+        let source = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("skills"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("plugins"), withIntermediateDirectories: true)
+        try "model = \"gpt\"".write(to: source.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+        try "secret".write(to: source.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+        try "history".write(to: source.appendingPathComponent("session_index.jsonl"), atomically: true, encoding: .utf8)
+
+        let options = CloneOptions(
+            config: true,
+            auth: false,
+            skills: true,
+            plugins: true,
+            agents: false,
+            prompts: false,
+            rules: false,
+            profiles: false,
+            memories: false,
+            browserSupport: false,
+            sessionsAndLogs: false
+        )
+        try FileCopier().createHome(destination: destination, source: source, options: options)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("config.toml").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("skills").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("plugins").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("auth.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("session_index.jsonl").path))
+    }
+
     func testTerminalCommandUsesPerProcessCodexHome() {
         let home = CodexHome(
             name: "Temp",

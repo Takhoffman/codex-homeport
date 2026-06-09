@@ -84,7 +84,11 @@ final class HomeportModel: ObservableObject {
         do {
             let formatter = DateFormatter()
             formatter.dateFormat = "MMM d HH:mm"
-            _ = try service.clone(name: "Working Setup \(formatter.string(from: Date()))", preset: state.preferences.defaultClonePreset)
+            _ = try service.clone(
+                name: "Working Setup \(formatter.string(from: Date()))",
+                preset: state.preferences.defaultClonePreset,
+                options: state.preferences.cloneOptions
+            )
             status = "Cloned working setup"
             refresh()
         } catch {
@@ -191,6 +195,7 @@ final class HomeportModel: ObservableObject {
         do {
             var next = try service.loadState()
             next.preferences.defaultClonePreset = preset
+            next.preferences.cloneOptions = .preset(preset)
             try service.saveState(next)
             refresh()
         } catch {
@@ -202,6 +207,17 @@ final class HomeportModel: ObservableObject {
         do {
             var next = try service.loadState()
             next.preferences.launchTemporaryByDefault = value
+            try service.saveState(next)
+            refresh()
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func updateCloneOptions(_ transform: (inout CloneOptions) -> Void) {
+        do {
+            var next = try service.loadState()
+            transform(&next.preferences.cloneOptions)
             try service.saveState(next)
             refresh()
         } catch {
@@ -470,10 +486,50 @@ struct QuickOptions: View {
                 }
             }
 
+            CloneIncludeToggles()
+
             Button("Reset Options") {
                 model.resetDefaults()
             }
         }
+    }
+}
+
+struct CloneIncludeToggles: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Clone Includes")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 6) {
+                toggle("config", \.config)
+                toggle("auth", \.auth)
+                toggle("skills", \.skills)
+                toggle("plugins", \.plugins)
+                toggle("agents", \.agents)
+                toggle("prompts", \.prompts)
+                toggle("rules", \.rules)
+                toggle("profiles", \.profiles)
+                toggle("memories", \.memories)
+                toggle("browser", \.browserSupport)
+                toggle("sessions", \.sessionsAndLogs)
+                toggle("everything", \.everything)
+            }
+        }
+    }
+
+    private func toggle(_ label: String, _ keyPath: WritableKeyPath<CloneOptions, Bool>) -> some View {
+        Toggle(label, isOn: Binding(
+            get: { model.state.preferences.cloneOptions[keyPath: keyPath] },
+            set: { value in
+                model.updateCloneOptions { options in
+                    options[keyPath: keyPath] = value
+                }
+            }
+        ))
+        .font(.caption)
     }
 }
 

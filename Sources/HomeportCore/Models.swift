@@ -197,6 +197,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
 public struct HomeportPreferences: Codable, Equatable, Sendable {
     public var defaultLaunchTarget: LaunchTarget
     public var defaultClonePreset: ClonePreset
+    public var cloneOptions: CloneOptions
     public var launchTemporaryByDefault: Bool
     public var onboardEnablesAutostart: Bool
     public var installAppByDefault: Bool
@@ -204,15 +205,103 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
     public init(
         defaultLaunchTarget: LaunchTarget = .desktop,
         defaultClonePreset: ClonePreset = .workingSetup,
+        cloneOptions: CloneOptions = CloneOptions.workingSetup,
         launchTemporaryByDefault: Bool = false,
         onboardEnablesAutostart: Bool = true,
         installAppByDefault: Bool = true
     ) {
         self.defaultLaunchTarget = defaultLaunchTarget
         self.defaultClonePreset = defaultClonePreset
+        self.cloneOptions = cloneOptions
         self.launchTemporaryByDefault = launchTemporaryByDefault
         self.onboardEnablesAutostart = onboardEnablesAutostart
         self.installAppByDefault = installAppByDefault
+    }
+}
+
+public struct CloneOptions: Codable, Equatable, Sendable {
+    public var config: Bool
+    public var auth: Bool
+    public var skills: Bool
+    public var plugins: Bool
+    public var agents: Bool
+    public var prompts: Bool
+    public var rules: Bool
+    public var profiles: Bool
+    public var memories: Bool
+    public var browserSupport: Bool
+    public var sessionsAndLogs: Bool
+    public var everything: Bool
+
+    public init(
+        config: Bool = true,
+        auth: Bool = true,
+        skills: Bool = true,
+        plugins: Bool = true,
+        agents: Bool = true,
+        prompts: Bool = true,
+        rules: Bool = true,
+        profiles: Bool = true,
+        memories: Bool = true,
+        browserSupport: Bool = true,
+        sessionsAndLogs: Bool = false,
+        everything: Bool = false
+    ) {
+        self.config = config
+        self.auth = auth
+        self.skills = skills
+        self.plugins = plugins
+        self.agents = agents
+        self.prompts = prompts
+        self.rules = rules
+        self.profiles = profiles
+        self.memories = memories
+        self.browserSupport = browserSupport
+        self.sessionsAndLogs = sessionsAndLogs
+        self.everything = everything
+    }
+
+    public static let empty = CloneOptions(
+        config: false,
+        auth: false,
+        skills: false,
+        plugins: false,
+        agents: false,
+        prompts: false,
+        rules: false,
+        profiles: false,
+        memories: false,
+        browserSupport: false,
+        sessionsAndLogs: false,
+        everything: false
+    )
+
+    public static let configOnly = CloneOptions(
+        config: true,
+        auth: false,
+        skills: true,
+        plugins: true,
+        agents: false,
+        prompts: true,
+        rules: true,
+        profiles: true,
+        memories: false,
+        browserSupport: false,
+        sessionsAndLogs: false,
+        everything: false
+    )
+
+    public static let workingSetup = CloneOptions()
+
+    public static let full = CloneOptions(everything: true)
+
+    public static func preset(_ preset: ClonePreset) -> CloneOptions {
+        switch preset {
+        case .empty: .empty
+        case .configOnly: .configOnly
+        case .workingSetup: .workingSetup
+        case .everything: .full
+        }
     }
 }
 
