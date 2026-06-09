@@ -1090,6 +1090,7 @@ struct SettingsTab: View {
                 .disabled(true)
             SectionLabel("Install")
             AutoUpdaterCard()
+            InfoCard(title: "Version", subtitle: "\(AppVersion.version) (\(AppVersion.build)) • \(model.channel.rawValue)")
             HStack {
                 Button("Open Console", action: openConsole)
                 Spacer()
