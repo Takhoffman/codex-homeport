@@ -1,0 +1,51 @@
+{
+  "name": "codex-homeport",
+  "version": "0.3.0",
+  "description": "A macOS menu bar launcher and hygiene tool for managing multiple Codex homes.",
+  "license": "MIT",
+  "homepage": "https://github.com/Takhoffman/codex-homeport#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Takhoffman/codex-homeport.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Takhoffman/codex-homeport/issues"
+  },
+  "keywords": [
+    "codex",
+    "macos",
+    "menu-bar",
+    "launcher",
+    "swift"
+  ],
+  "bin": {
+    "homeport": "npm/homeport.js"
+  },
+  "scripts": {
+    "postinstall": "node npm/postinstall.js",
+    "build": "swift build -c release --product homeport && swift build -c release --product CodexHomeportApp",
+    "release:check": "swift test && npm pack --dry-run",
+    "test": "swift test"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "CHANGELOG.md",
+    "LICENSE",
+    "Package.swift",
+    "README.md",
+    "releases",
+    "Sources",
+    "Tests",
+    "docs",
+    "install.sh",
+    "npm"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin"
+  ]
+}

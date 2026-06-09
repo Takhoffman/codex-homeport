@@ -58,13 +58,30 @@ The menu keeps pinned homes and recent launches close at hand:
 - Relaunch recent desktop or terminal sessions from the menu or Console.
 - Recents are based on Homeport launch history and survive app restarts.
 
-To install, configure autostart, and open the app:
+## Install And Update
+
+The recommended Mac install path is npm. The npm package builds the Swift CLI
+during install, exposes the `homeport` command, and keeps the source package in
+npm's normal global package location.
 
 ```sh
-swift run homeport onboard
+npm install -g codex-homeport
+homeport install --with-app
+homeport start
 ```
 
-To build and install an app bundle:
+To update:
+
+```sh
+npm install -g codex-homeport@latest
+homeport update
+```
+
+When installed through npm, `homeport update` rebuilds and reinstalls the app
+from the npm package. Use npm itself to fetch new published versions.
+
+If you already have the source repo checked out, you can still install directly
+from the current checkout:
 
 ```sh
 swift run homeport install --with-app
@@ -77,11 +94,52 @@ To install the CLI:
 swift run homeport install
 ```
 
-To update from git and reinstall:
+The older git-backed install script remains useful for source development:
 
 ```sh
-homeport update --with-app
+./install.sh
 ```
+
+That script keeps a checkout at
+`~/Library/Application Support/CodexHomeport/Source`, installs the CLI to
+`~/bin/homeport`, installs the app to `~/Applications/Codex Homeport.app`,
+enables autostart, and starts the app.
+
+If the app is already installed, `homeport update` reinstalls it automatically;
+if the menu bar app is running, it restarts it after the update so macOS uses
+the new binary. Use `homeport update --no-restart` when you want to relaunch
+manually.
+
+The versioning strategy is simple semantic versions:
+
+- Patch versions (`0.2.1`) are bug fixes, docs, and safe installer tweaks.
+- Minor versions (`0.3.0`) are visible app or CLI behavior changes.
+- Major versions (`1.0.0`) are reserved for incompatible state, path, or command changes.
+
+`HomeportCore/AppVersion.swift` is the source of truth for the CLI version and
+the generated app bundle `CFBundleShortVersionString`/`CFBundleVersion`;
+`package.json` must match it. Each version also has release notes in
+`releases/vX.Y.Z.md`, and `CHANGELOG.md` links to those files.
+
+To cut a release:
+
+```sh
+npm run release:check
+git tag vX.Y.Z
+git push origin main vX.Y.Z
+```
+
+Pushing a `vX.Y.Z` tag runs the GitHub Release workflow. The workflow tests the
+package, publishes `codex-homeport` to npm using the `NPM_TOKEN` repository
+secret, and creates a GitHub Release from `releases/vX.Y.Z.md`. Users update
+with `npm install -g codex-homeport@latest`.
+
+## UI Mockups
+
+The phone-style tab mockup is at
+[`docs/mockups/iphone-tabs.html`](docs/mockups/iphone-tabs.html). It mirrors the
+menu model used by the SwiftUI app: Favorites, Recents, Homes, New, and Settings
+with focused home detail views.
 
 Autostart is managed by a user LaunchAgent:
 

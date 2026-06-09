@@ -18,3 +18,5 @@ jobs:
         run: swift build --product homeport
       - name: Check help output
         run: .build/debug/homeport --help
+      - name: Check npm package
+        run: npm pack --dry-run

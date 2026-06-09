@@ -1,0 +1,1114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Homeport Phone Tabs Prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --blue: #087bff;
+      --green: #2fb35e;
+      --ink: #111114;
+      --muted: #707078;
+      --line: rgba(60, 60, 67, 0.16);
+      --fill: rgba(118, 118, 128, 0.12);
+      --card: rgba(255, 255, 255, 0.76);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      background: #ececf2;
+      color: var(--ink);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 18% 12%, rgba(255, 188, 104, 0.42), transparent 30%),
+        radial-gradient(circle at 80% 26%, rgba(25, 125, 255, 0.23), transparent 32%),
+        radial-gradient(circle at 45% 78%, rgba(255, 116, 177, 0.18), transparent 30%),
+        linear-gradient(145deg, #f9f9fc, #dddee8);
+    }
+
+    button, input {
+      font: inherit;
+    }
+
+    .phone {
+      width: min(420px, calc(100vw - 24px));
+      height: min(860px, calc(100vh - 24px));
+      overflow: hidden;
+      border: 1px solid rgba(0, 0, 0, 0.18);
+      border-radius: 34px;
+      background: rgba(250, 250, 252, 0.84);
+      box-shadow: 0 28px 80px rgba(18, 24, 38, 0.28);
+      backdrop-filter: blur(28px);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    header {
+      padding: 22px 22px 10px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      grid-template-areas:
+        "left . actions"
+        "title title title";
+      gap: 14px;
+    }
+
+    .top-left-action {
+      grid-area: left;
+      border: 0;
+      padding: 7px 0;
+      background: transparent;
+      color: var(--blue);
+      font-size: 16px;
+      font-weight: 760;
+      text-align: left;
+    }
+
+    .top-left-action.hidden {
+      visibility: hidden;
+    }
+
+    .title-block {
+      grid-area: title;
+      min-width: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 27px;
+      letter-spacing: 0;
+      line-height: 1.05;
+    }
+
+    .subhead {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .header-actions {
+      grid-area: actions;
+      display: flex;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
+
+    .text-action {
+      border: 0;
+      padding: 7px 0;
+      background: transparent;
+      color: var(--blue);
+      font-size: 16px;
+      font-weight: 760;
+      text-align: right;
+    }
+
+    .text-action.hidden {
+      display: none;
+    }
+
+    .phone.detail-mode nav,
+    .phone.detail-mode .circle {
+      display: none;
+    }
+
+    .phone.detail-mode #detailEdit {
+      display: block;
+    }
+
+    .circle {
+      width: 38px;
+      height: 38px;
+      border: 0;
+      border-radius: 19px;
+      background: var(--fill);
+      color: #54545b;
+      font-size: 20px;
+      display: grid;
+      place-items: center;
+    }
+
+    main {
+      min-height: 0;
+      overflow: auto;
+      padding: 0 18px 12px;
+    }
+
+    .tab-panel {
+      display: none;
+      gap: 12px;
+      align-content: start;
+      padding-bottom: 6px;
+    }
+
+    .tab-panel.active {
+      display: grid;
+    }
+
+    .hero {
+      width: 100%;
+      min-height: 108px;
+      border-radius: 30px;
+      padding: 18px;
+      color: white;
+      text-align: left;
+      background: linear-gradient(145deg, #0b7cff, #0065dd);
+      box-shadow: 0 12px 28px rgba(0, 99, 220, 0.27);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .hero-title {
+      font-size: 25px;
+      font-weight: 850;
+      line-height: 1.08;
+    }
+
+    .hero-subtitle {
+      margin-top: 5px;
+      color: rgba(255, 255, 255, 0.76);
+      font-size: 16px;
+      font-weight: 750;
+    }
+
+    .hero-icon {
+      width: 46px;
+      height: 46px;
+      border-radius: 23px;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, 0.18);
+      font-size: 24px;
+    }
+
+    .hero-actions {
+      display: grid;
+      gap: 8px;
+    }
+
+    .hero-action {
+      width: 58px;
+      height: 38px;
+      border: 0;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .section-title {
+      margin: 10px 2px 0;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 850;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .card, .row {
+      border: 0;
+      border-radius: 16px;
+      background: var(--card);
+      box-shadow: inset 0 0 0 1px rgba(60, 60, 67, 0.08);
+    }
+
+    .row {
+      width: 100%;
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      text-align: left;
+    }
+
+    .row[data-home] {
+      cursor: default;
+    }
+
+    .edit-control {
+      display: none;
+      width: 24px;
+      height: 24px;
+      border-radius: 12px;
+      background: rgba(255, 59, 48, 0.14);
+      color: #c51f18;
+      place-items: center;
+      font-weight: 900;
+    }
+
+    .phone.editing .row[data-home] {
+      grid-template-columns: 24px 34px 1fr auto;
+    }
+
+    .phone.editing .row[data-home] .edit-control {
+      display: grid;
+    }
+
+    .phone.editing .quick-actions {
+      opacity: 0.42;
+    }
+
+    .row.selected-for-edit {
+      box-shadow: inset 0 0 0 2px rgba(8, 123, 255, 0.35);
+      background: rgba(8, 123, 255, 0.08);
+    }
+
+    .symbol {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      background: var(--fill);
+      color: #2c2c31;
+      font-size: 18px;
+      font-weight: 800;
+    }
+
+    .row-title {
+      font-size: 17px;
+      font-weight: 820;
+      line-height: 1.15;
+    }
+
+    .row-subtitle {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 650;
+      line-height: 1.25;
+    }
+
+    .quick-actions {
+      display: flex;
+      gap: 7px;
+    }
+
+    .action {
+      min-width: 48px;
+      height: 34px;
+      border: 0;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      background: rgba(8, 123, 255, 0.12);
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 850;
+    }
+
+    .action.term {
+      background: rgba(47, 179, 94, 0.14);
+      color: var(--green);
+    }
+
+    .card {
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+      padding: 4px;
+      border-radius: 14px;
+      background: var(--fill);
+    }
+
+    .segment {
+      border: 0;
+      border-radius: 11px;
+      padding: 9px 8px;
+      background: transparent;
+      color: #242428;
+      font-size: 15px;
+      font-weight: 760;
+    }
+
+    .segment.active {
+      background: white;
+      color: var(--blue);
+      box-shadow: 0 1px 5px rgba(0, 0, 0, 0.12);
+    }
+
+    .template-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    .template {
+      min-height: 76px;
+      border: 0;
+      border-radius: 16px;
+      padding: 12px;
+      background: var(--fill);
+      text-align: left;
+    }
+
+    .template.active {
+      background: rgba(8, 123, 255, 0.13);
+      box-shadow: inset 0 0 0 2px rgba(8, 123, 255, 0.35);
+    }
+
+    .template strong {
+      display: block;
+      font-size: 16px;
+      line-height: 1.1;
+    }
+
+    .template span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .checks {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 16px;
+    }
+
+    .copy-groups {
+      display: grid;
+      gap: 10px;
+    }
+
+    .copy-group {
+      border-radius: 14px;
+      padding: 12px;
+      background: var(--fill);
+      display: grid;
+      gap: 8px;
+    }
+
+    .copy-group.warning {
+      background: rgba(255, 149, 0, 0.13);
+      box-shadow: inset 0 0 0 1px rgba(255, 149, 0, 0.18);
+    }
+
+    .group-title {
+      color: #4d4d55;
+      font-size: 13px;
+      font-weight: 850;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 28px;
+      font-size: 15px;
+      font-weight: 750;
+    }
+
+    input[type="checkbox"] {
+      width: 22px;
+      height: 22px;
+      accent-color: var(--blue);
+    }
+
+    .create-footer {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .primary-small {
+      border: 0;
+      border-radius: 16px;
+      padding: 12px 15px;
+      background: var(--blue);
+      color: white;
+      font-size: 16px;
+      font-weight: 850;
+    }
+
+    .secondary-small, .danger-small {
+      border: 0;
+      border-radius: 14px;
+      padding: 10px 12px;
+      font-size: 15px;
+      font-weight: 850;
+    }
+
+    .secondary-small {
+      background: rgba(8, 123, 255, 0.12);
+      color: var(--blue);
+    }
+
+    .danger-small {
+      background: rgba(255, 59, 48, 0.14);
+      color: #c51f18;
+    }
+
+    .action-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .note {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 650;
+      line-height: 1.28;
+    }
+
+    .status-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .status-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 12px;
+      border-radius: 14px;
+      background: var(--fill);
+    }
+
+    .badge {
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: rgba(47, 179, 94, 0.14);
+      color: #177d3c;
+      font-size: 12px;
+      font-weight: 850;
+    }
+
+    .badge.warn {
+      background: rgba(255, 149, 0, 0.16);
+      color: #9a5a00;
+    }
+
+    .diagnostic-banner {
+      border-radius: 16px;
+      padding: 13px;
+      background: rgba(255, 149, 0, 0.14);
+      box-shadow: inset 0 0 0 1px rgba(255, 149, 0, 0.22);
+      display: grid;
+      gap: 8px;
+    }
+
+    .detail-panel {
+      display: none;
+      gap: 12px;
+      align-content: start;
+      padding-bottom: 6px;
+    }
+
+    .detail-panel.active {
+      display: grid;
+    }
+
+    .detail-hero {
+      border-radius: 28px;
+      padding: 18px;
+      background: var(--card);
+      box-shadow: inset 0 0 0 1px rgba(60, 60, 67, 0.08);
+      display: grid;
+      gap: 14px;
+    }
+
+    .detail-avatar {
+      width: 70px;
+      height: 70px;
+      border-radius: 24px;
+      display: grid;
+      place-items: center;
+      background: var(--fill);
+      color: #242428;
+      font-size: 34px;
+      font-weight: 850;
+      margin: 2px auto 0;
+    }
+
+    .detail-title {
+      text-align: center;
+      font-size: 26px;
+      font-weight: 880;
+      line-height: 1.05;
+    }
+
+    .detail-subtitle {
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 700;
+      margin-top: -8px;
+    }
+
+    .detail-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .detail-actions .action {
+      width: 100%;
+      height: 48px;
+      font-size: 15px;
+    }
+
+    nav {
+      padding: 8px 14px 16px;
+      border-top: 1px solid var(--line);
+      background: rgba(250, 250, 252, 0.92);
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 3px;
+    }
+
+    .tab {
+      border: 0;
+      border-radius: 14px;
+      padding: 7px 1px 6px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .tab span {
+      display: block;
+      margin-bottom: 2px;
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .tab.active {
+      color: var(--blue);
+      background: rgba(8, 123, 255, 0.1);
+    }
+
+    .screen-caption {
+      position: fixed;
+      left: 20px;
+      bottom: 16px;
+      color: rgba(20, 20, 24, 0.58);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    @media (max-height: 720px) {
+      .phone { height: calc(100vh - 16px); border-radius: 28px; }
+      header { padding-top: 16px; }
+      .hero { min-height: 96px; }
+    }
+  </style>
+</head>
+<body>
+  <section class="phone" aria-label="Codex Homeport phone-style prototype">
+    <header>
+      <button class="top-left-action" id="contextAction">Edit</button>
+      <div class="title-block">
+        <h1 id="screenTitle">Favorites</h1>
+        <div class="subhead" id="screenSubtitle">Fast launch your usual homes</div>
+      </div>
+      <div class="header-actions">
+        <button class="text-action hidden" id="detailEdit">Edit</button>
+        <button class="circle" aria-label="Add home" data-tab-target="new">＋</button>
+        <button class="circle" aria-label="Refresh">↻</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="tab-panel active" id="favorites" data-title="Favorites" data-subtitle="Fast launch your usual homes">
+        <div class="hero">
+          <div>
+            <div class="hero-title">Default Launch</div>
+            <div class="hero-subtitle">Main home • choose where it opens</div>
+          </div>
+          <div class="hero-actions" aria-label="Main launch actions">
+            <button class="hero-action" title="Open Main in Codex desktop app">App</button>
+            <button class="hero-action" title="Open Main in Terminal">Term</button>
+          </div>
+        </div>
+
+        <div class="section-title">Favorites</div>
+        <div class="row" data-home="main" data-kind="Normal home" data-symbol="⌂">
+          <div class="symbol">⌂</div>
+          <div>
+            <div class="row-title">Main</div>
+            <div class="row-subtitle">Your normal ~/.codex setup</div>
+          </div>
+          <div class="quick-actions" aria-label="Main quick actions">
+            <button class="action" title="Open in Codex desktop app">App</button>
+            <button class="action term" title="Open in Terminal">Term</button>
+          </div>
+        </div>
+
+        <div class="row" data-home="plugin-lab" data-kind="Copied home" data-symbol="□">
+          <div class="symbol">□</div>
+          <div>
+            <div class="row-title">Plugin Lab</div>
+            <div class="row-subtitle">Working copy • auth, skills, plugins</div>
+          </div>
+          <div class="quick-actions" aria-label="Plugin Lab quick actions">
+            <button class="action" title="Open in Codex desktop app">App</button>
+            <button class="action term" title="Open in Terminal">Term</button>
+          </div>
+        </div>
+
+        <div class="section-title">Recent</div>
+        <div class="row" data-home="temporary-test" data-kind="Temporary home" data-symbol="◷">
+          <div class="symbol">◷</div>
+          <div>
+            <div class="row-title">Temporary Test</div>
+            <div class="row-subtitle">desktop • 4m ago • cleanup pending</div>
+          </div>
+          <div class="quick-actions">
+            <button class="action" title="Open in Codex desktop app">App</button>
+            <button class="action term" title="Open in Terminal">Term</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="homes" data-title="Homes" data-subtitle="Browse, favorite, and launch homes">
+        <div class="section-title">All Homes</div>
+        <div class="row" data-home="main" data-kind="Normal home" data-symbol="★">
+          <div class="symbol">★</div>
+          <div>
+            <div class="row-title">Main</div>
+            <div class="row-subtitle">Favorite • normal Codex home</div>
+          </div>
+          <div class="quick-actions">
+            <button class="action" title="Open in Codex desktop app">App</button>
+            <button class="action term" title="Open in Terminal">Term</button>
+          </div>
+        </div>
+        <div class="row" data-home="plugin-lab" data-kind="Copied home" data-symbol="★">
+          <div class="symbol">★</div>
+          <div>
+            <div class="row-title">Plugin Lab</div>
+            <div class="row-subtitle">Favorite • copied home</div>
+          </div>
+          <div class="quick-actions">
+            <button class="action" title="Open in Codex desktop app">App</button>
+            <button class="action term" title="Open in Terminal">Term</button>
+          </div>
+        </div>
+        <div class="row" data-home="blank-slate" data-kind="Clean room" data-symbol="◇">
+          <div class="symbol">◇</div>
+          <div>
+            <div class="row-title">Blank Slate</div>
+            <div class="row-subtitle">Clean room • no inherited config</div>
+          </div>
+          <div class="quick-actions">
+            <button class="action" title="Open in Codex desktop app">App</button>
+            <button class="action term" title="Open in Terminal">Term</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row-title">Home details should slide in</div>
+          <div class="note">Tap a row for rename, favorite, delete, source path, and cleanup review. The two small buttons stay one-tap launch actions.</div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="new" data-title="New Home" data-subtitle="Choose the kind of home first">
+        <div class="section-title">Create</div>
+        <div class="template-grid">
+          <button class="template active" data-template="working">
+            <strong>Clone My Setup</strong>
+            <span>Start from selected parts of your main Codex home</span>
+          </button>
+          <button class="template" data-template="empty">
+            <strong>Clean Room</strong>
+            <span>Fresh saved home with no inherited files</span>
+          </button>
+          <button class="template" data-template="temporary">
+            <strong>Temporary Home</strong>
+            <span>Disposable test home with cleanup review</span>
+          </button>
+          <button class="template" data-template="config">
+            <strong>Config Only</strong>
+            <span>Shortcut clone with settings, skills, and prompts only</span>
+          </button>
+        </div>
+
+        <div class="section-title">Opens In</div>
+        <div class="segmented">
+          <button class="segment active">Desktop App</button>
+          <button class="segment">Terminal</button>
+        </div>
+
+        <div class="section-title">Clone Includes</div>
+        <div class="card copy-groups">
+          <div class="copy-group">
+            <div class="group-title">Safe Defaults</div>
+            <div class="checks">
+              <label><input checked type="checkbox"> Config</label>
+              <label><input checked type="checkbox"> Skills</label>
+              <label><input checked type="checkbox"> Plugins</label>
+              <label><input checked type="checkbox"> Prompts</label>
+              <label><input checked type="checkbox"> Rules</label>
+              <label><input checked type="checkbox"> Profiles</label>
+            </div>
+          </div>
+          <div class="copy-group warning">
+            <div class="group-title">Identity And Browser</div>
+            <div class="checks">
+              <label><input checked type="checkbox"> Auth</label>
+              <label><input checked type="checkbox"> Browser</label>
+              <label><input checked type="checkbox"> Agents</label>
+              <label><input checked type="checkbox"> Memories</label>
+            </div>
+            <div class="note">These can carry account identity, remembered context, or browser state.</div>
+          </div>
+          <div class="copy-group warning">
+            <div class="group-title">History</div>
+            <label><input type="checkbox"> Sessions and logs</label>
+            <div class="note">Leave off unless you really want prior sessions copied into the new home.</div>
+          </div>
+        </div>
+
+        <div class="card create-footer">
+          <div>
+            <div class="row-title">Plugin Lab</div>
+            <div class="note">Name field goes here; copy options appear only for clone-style homes.</div>
+          </div>
+          <button class="primary-small">Create</button>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="recents" data-title="Recents" data-subtitle="Recent opens and temporary cleanup">
+        <div class="section-title">Recent Opens</div>
+        <div class="status-list">
+          <div class="status-item">
+            <div>
+              <div class="row-title">Main · Desktop App</div>
+              <div class="row-subtitle">4m ago • ~/github.com/codex-homeport</div>
+            </div>
+            <div class="quick-actions" aria-label="Main recent launch actions">
+              <button class="action" title="Open in Codex desktop app">App</button>
+              <button class="action term" title="Open in Terminal">Term</button>
+            </div>
+          </div>
+          <div class="status-item">
+            <div>
+              <div class="row-title">Plugin Lab · Terminal</div>
+              <div class="row-subtitle">Yesterday • ~/github.com/plugin-lab</div>
+            </div>
+            <div class="quick-actions" aria-label="Plugin Lab recent launch actions">
+              <button class="action" title="Open in Codex desktop app">App</button>
+              <button class="action term" title="Open in Terminal">Term</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title">Cleanup Review</div>
+        <div class="card">
+          <div class="status-item">
+            <div>
+              <div class="row-title">Temporary Test</div>
+              <div class="row-subtitle">Disposable home • 2 paths will move to Trash</div>
+            </div>
+            <div class="quick-actions" aria-label="Temporary Test launch actions">
+              <button class="action" title="Open in Codex desktop app">App</button>
+              <button class="action term" title="Open in Terminal">Term</button>
+            </div>
+          </div>
+          <div class="action-row">
+            <button class="secondary-small">Promote</button>
+            <button class="danger-small">Review Delete</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="settings" data-title="Settings" data-subtitle="Defaults, diagnostics, and installer state">
+        <div class="diagnostic-banner">
+          <div class="row-title">Launch health appears good</div>
+          <div class="note">If Homeport finds a global CODEX_HOME or stale launcher, show the repair action here and on Favorites.</div>
+        </div>
+
+        <div class="section-title">Defaults</div>
+        <div class="card">
+          <div class="segmented">
+            <button class="segment active">Desktop App</button>
+            <button class="segment">Terminal</button>
+          </div>
+          <label><input type="checkbox"> Prefer temporary launches</label>
+          <label><input checked type="checkbox"> Start Homeport at login</label>
+        </div>
+
+        <div class="section-title">Diagnostics</div>
+        <div class="card status-list">
+          <div class="status-item">
+            <div>
+              <div class="row-title">GUI CODEX_HOME</div>
+              <div class="row-subtitle">not set</div>
+            </div>
+            <span class="badge">Good</span>
+          </div>
+          <div class="status-item">
+            <div>
+              <div class="row-title">Codex.app</div>
+              <div class="row-subtitle">found in /Applications</div>
+            </div>
+            <span class="badge">Found</span>
+          </div>
+        </div>
+
+        <button class="row">
+          <div class="symbol">↻</div>
+          <div>
+            <div class="row-title">Update Homeport</div>
+            <div class="row-subtitle">npm install -g codex-homeport@latest</div>
+          </div>
+          <div>›</div>
+        </button>
+      </section>
+
+      <section class="detail-panel" id="homeDetail" data-title="Main" data-subtitle="Normal home">
+        <div class="detail-hero">
+          <div class="detail-avatar" id="detailAvatar">⌂</div>
+          <div>
+            <div class="detail-title" id="detailName">Main</div>
+            <div class="detail-subtitle" id="detailKind">Normal home • Favorite</div>
+          </div>
+          <div class="detail-actions" aria-label="Focused home launch actions">
+            <button class="action" title="Open focused home in Codex desktop app">App</button>
+            <button class="action term" title="Open focused home in Terminal">Term</button>
+          </div>
+        </div>
+
+        <div class="section-title">Home</div>
+        <div class="card status-list">
+          <div class="status-item">
+            <div>
+              <div class="row-title">Path</div>
+              <div class="row-subtitle" id="detailPath">~/.codex</div>
+            </div>
+            <span class="badge" id="detailStatus">Ready</span>
+          </div>
+          <div class="status-item">
+            <div>
+              <div class="row-title">Copy Source</div>
+              <div class="row-subtitle" id="detailSource">Main Codex home</div>
+            </div>
+            <span class="badge" id="detailPreset">Main</span>
+          </div>
+        </div>
+
+        <div class="section-title">Manage</div>
+        <div class="card">
+          <label><input checked type="checkbox" id="detailFavorite"> Favorite</label>
+          <div class="action-row">
+            <button class="secondary-small">Rename</button>
+            <button class="danger-small">Review Delete</button>
+          </div>
+          <div class="note" id="detailNote">Edit mode would expose name, favorite state, pin order, and destructive cleanup review.</div>
+        </div>
+      </section>
+    </main>
+
+    <nav aria-label="Homeport tabs">
+      <button class="tab active" data-tab-target="favorites"><span>★</span>Favorites</button>
+      <button class="tab" data-tab-target="recents"><span>◷</span>Recents</button>
+      <button class="tab" data-tab-target="homes"><span>▦</span>Homes</button>
+      <button class="tab" data-tab-target="new"><span>＋</span>New</button>
+      <button class="tab" data-tab-target="settings"><span>⚙</span>Settings</button>
+    </nav>
+  </section>
+
+  <div class="screen-caption">Working HTML prototype • phone-style menu model</div>
+
+  <script>
+    const phone = document.querySelector(".phone");
+    const title = document.querySelector("#screenTitle");
+    const subtitle = document.querySelector("#screenSubtitle");
+    const contextAction = document.querySelector("#contextAction");
+    const detailEdit = document.querySelector("#detailEdit");
+    const tabs = [...document.querySelectorAll("nav [data-tab-target]")];
+    const panels = [...document.querySelectorAll(".tab-panel")];
+    const detailPanel = document.querySelector("#homeDetail");
+
+    const homes = {
+      "main": {
+        name: "Main",
+        kind: "Normal home",
+        symbol: "⌂",
+        path: "~/.codex",
+        source: "This is your main Codex home",
+        preset: "Main",
+        favorite: true,
+        status: "Ready"
+      },
+      "plugin-lab": {
+        name: "Plugin Lab",
+        kind: "Copied home",
+        symbol: "□",
+        path: "~/.codex-homes/plugin-lab",
+        source: "Cloned from Main with auth, skills, plugins",
+        preset: "Clone",
+        favorite: true,
+        status: "Ready"
+      },
+      "blank-slate": {
+        name: "Blank Slate",
+        kind: "Clean room",
+        symbol: "◇",
+        path: "~/.codex-homes/blank-slate",
+        source: "No inherited files",
+        preset: "Empty",
+        favorite: false,
+        status: "Ready"
+      },
+      "temporary-test": {
+        name: "Temporary Test",
+        kind: "Temporary home",
+        symbol: "◷",
+        path: "~/.codex-homes/temp-1705",
+        source: "Created as disposable test state",
+        preset: "Temporary",
+        favorite: false,
+        status: "Review"
+      }
+    };
+
+    let activeTab = "favorites";
+    let detailReturnTab = "favorites";
+    let isEditing = false;
+
+    document.querySelectorAll(".row[data-home]").forEach((row) => {
+      if (!row.querySelector(".edit-control")) {
+        const control = document.createElement("div");
+        control.className = "edit-control";
+        control.textContent = "−";
+        row.prepend(control);
+      }
+    });
+
+    function activate(id) {
+      activeTab = id;
+      isEditing = false;
+      phone.classList.remove("editing", "detail-mode");
+      detailPanel.classList.remove("active");
+      panels.forEach((panel) => panel.classList.toggle("active", panel.id === id));
+      document.querySelectorAll("nav .tab").forEach((tab) => {
+        tab.classList.toggle("active", tab.dataset.tabTarget === id);
+      });
+      const active = document.getElementById(id);
+      title.textContent = active.dataset.title;
+      subtitle.textContent = active.dataset.subtitle;
+      const labels = {
+        favorites: "Edit",
+        recents: "Edit",
+        homes: "Edit"
+      };
+      contextAction.textContent = labels[id] || "Edit";
+      contextAction.classList.toggle("hidden", !labels[id]);
+      detailEdit.classList.add("hidden");
+    }
+
+    function setEditing(value) {
+      isEditing = value;
+      phone.classList.toggle("editing", value);
+      contextAction.textContent = value ? "Done" : "Edit";
+    }
+
+    function openHomeDetail(id) {
+      const home = homes[id];
+      if (!home) return;
+      detailReturnTab = activeTab;
+      isEditing = false;
+      phone.classList.remove("editing");
+      phone.classList.add("detail-mode");
+      panels.forEach((panel) => panel.classList.remove("active"));
+      detailPanel.classList.add("active");
+      title.textContent = home.name;
+      subtitle.textContent = home.kind;
+      contextAction.textContent = `‹ ${document.getElementById(detailReturnTab).dataset.title}`;
+      contextAction.classList.remove("hidden");
+      detailEdit.classList.remove("hidden");
+      document.querySelector("#detailAvatar").textContent = home.symbol;
+      document.querySelector("#detailName").textContent = home.name;
+      document.querySelector("#detailKind").textContent = `${home.kind} • ${home.favorite ? "Favorite" : "Not favorite"}`;
+      document.querySelector("#detailPath").textContent = home.path;
+      document.querySelector("#detailSource").textContent = home.source;
+      document.querySelector("#detailPreset").textContent = home.preset;
+      document.querySelector("#detailStatus").textContent = home.status;
+      document.querySelector("#detailFavorite").checked = home.favorite;
+    }
+
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => activate(tab.dataset.tabTarget));
+    });
+
+    document.querySelectorAll(".header-actions [data-tab-target]").forEach((button) => {
+      button.addEventListener("click", () => activate(button.dataset.tabTarget));
+    });
+
+    contextAction.addEventListener("click", () => {
+      if (phone.classList.contains("detail-mode")) {
+        activate(detailReturnTab);
+        return;
+      }
+      if (["favorites", "recents", "homes"].includes(activeTab)) {
+        setEditing(!isEditing);
+      }
+    });
+
+    detailEdit.addEventListener("click", () => {
+      detailEdit.textContent = detailEdit.textContent === "Edit" ? "Done" : "Edit";
+      document.querySelector("#detailNote").textContent = detailEdit.textContent === "Done"
+        ? "Editing: rename, favorite, delete, and cleanup review controls are active."
+        : "Edit mode would expose name, favorite state, pin order, and destructive cleanup review.";
+    });
+
+    document.querySelectorAll(".row[data-home]").forEach((row) => {
+      row.addEventListener("click", (event) => {
+        if (event.target.closest("button") || event.target.closest(".edit-control")) {
+          return;
+        }
+        if (isEditing) {
+          row.classList.toggle("selected-for-edit");
+          return;
+        }
+        openHomeDetail(row.dataset.home);
+      });
+    });
+
+    document.querySelectorAll(".template").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".template").forEach((candidate) => candidate.classList.remove("active"));
+        button.classList.add("active");
+      });
+    });
+
+    document.querySelectorAll(".segment").forEach((button) => {
+      button.addEventListener("click", () => {
+        const group = button.closest(".segmented");
+        group.querySelectorAll(".segment").forEach((candidate) => candidate.classList.remove("active"));
+        button.classList.add("active");
+      });
+    });
+  </script>
+</body>
+</html>

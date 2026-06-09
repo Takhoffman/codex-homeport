@@ -1,13 +1,8 @@
 # Changelog
 
-## 0.1.0
+Release notes live in `releases/` so GitHub releases and the package changelog
+can share the same source text.
 
-- Initial SwiftUI menu bar app.
-- Added `homeport` CLI.
-- Added main, clone, clean-room, temporary, and throwaway launch flows.
-- Added terminal and desktop Codex launch targets.
-- Added pinned homes and recent launch sections for the menu and Console.
-- Added remembered clone include toggles for config, auth, skills, plugins, agents, prompts, rules, profiles, memories, browser support, and sessions/logs.
-- Added temporary-home cleanup review and promotion.
-- Added install, update, onboard, configure, autostart, start, and uninstall commands.
-- Added diagnostics for global `CODEX_HOME`, Codex.app, CLI, sessions, and suspicious launchers.
+- [v0.3.0](releases/v0.3.0.md)
+- [v0.2.0](releases/v0.2.0.md)
+- [v0.1.0](releases/v0.1.0.md)

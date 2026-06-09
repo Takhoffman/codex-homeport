@@ -9,7 +9,7 @@ struct CodexHomeportApp: App {
         MenuBarExtra("Codex Homeport", systemImage: model.menuIcon) {
             HomeportMenuView()
                 .environmentObject(model)
-                .frame(width: 340)
+                .frame(width: 390)
         }
         .menuBarExtraStyle(.window)
 
@@ -79,6 +79,11 @@ final class HomeportModel: ObservableObject {
         launch(selector, target: instance.target)
     }
 
+    func launchRecent(_ instance: LaunchedInstance, target: LaunchTarget) {
+        let selector = state.homes.first(where: { $0.id == instance.homeID })?.slug ?? instance.homeName
+        launch(selector, target: target)
+    }
+
     func cloneWorkingSetup() {
         do {
             let formatter = DateFormatter()
@@ -89,6 +94,21 @@ final class HomeportModel: ObservableObject {
                 options: state.preferences.cloneOptions
             )
             refresh(statusMessage: "Created copied home")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func cloneConfigOnly() {
+        do {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "MMM d HH:mm"
+            _ = try service.clone(
+                name: "Config Copy \(formatter.string(from: Date()))",
+                preset: .configOnly,
+                options: .configOnly
+            )
+            refresh(statusMessage: "Created config-only home")
         } catch {
             status = error.localizedDescription
         }
@@ -208,6 +228,7 @@ final class HomeportModel: ObservableObject {
         do {
             var next = try service.loadState()
             transform(&next.preferences.cloneOptions)
+            next.preferences.defaultClonePreset = clonePreset(for: next.preferences.cloneOptions)
             try service.saveState(next)
             refresh(statusMessage: "Saved copy options")
         } catch {
@@ -227,296 +248,469 @@ final class HomeportModel: ObservableObject {
     private func modelSelector(for selector: String) -> String {
         selector == "preferred" ? (state.preferences.launchTemporaryByDefault ? "temp" : "main") : selector
     }
+
+    private func clonePreset(for options: CloneOptions) -> ClonePreset {
+        if options == .empty {
+            return .empty
+        }
+        if options.everything {
+            return .everything
+        }
+        if options == .configOnly {
+            return .configOnly
+        }
+        return .workingSetup
+    }
+}
+
+enum MenuTab: String, CaseIterable, Identifiable {
+    case favorites
+    case recents
+    case homes
+    case new
+    case settings
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .favorites: "Favorites"
+        case .recents: "Recents"
+        case .homes: "Homes"
+        case .new: "New Home"
+        case .settings: "Settings"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .favorites: "Fast launch your usual homes"
+        case .recents: "Recent opens and temporary cleanup"
+        case .homes: "Browse, favorite, and launch homes"
+        case .new: "Choose the kind of home first"
+        case .settings: "Defaults, diagnostics, and installer state"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .favorites: "star.fill"
+        case .recents: "clock"
+        case .homes: "square.grid.2x2.fill"
+        case .new: "plus"
+        case .settings: "gearshape.fill"
+        }
+    }
+}
+
+enum NewHomeMode: String, CaseIterable, Identifiable {
+    case clone
+    case cleanRoom
+    case temporary
+    case configOnly
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .clone: "Clone My Setup"
+        case .cleanRoom: "Clean Room"
+        case .temporary: "Temporary Home"
+        case .configOnly: "Config Only"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .clone: "Start from selected parts of your main Codex home"
+        case .cleanRoom: "Fresh saved home with no inherited files"
+        case .temporary: "Disposable test home with cleanup review"
+        case .configOnly: "Settings, skills, and prompts only"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .clone: "square.on.square"
+        case .cleanRoom: "sparkles"
+        case .temporary: "timer"
+        case .configOnly: "slider.horizontal.3"
+        }
+    }
+
+    var showsCloneOptions: Bool {
+        self == .clone || self == .configOnly
+    }
 }
 
 struct HomeportMenuView: View {
     @EnvironmentObject var model: HomeportModel
     @Environment(\.openWindow) private var openWindow
+    @State private var selectedTab: MenuTab = .favorites
+    @State private var isEditingList = false
+    @State private var focusedHome: CodexHome?
+    @State private var detailReturnTab: MenuTab = .favorites
+    @State private var isEditingDetail = false
+    @State private var editedName = ""
+    @State private var newHomeMode: NewHomeMode = .clone
+    @State private var newHomeLaunchTarget: LaunchTarget = .desktop
+    @State private var showsAddFavoriteSheet = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(spacing: 0) {
+            PhoneMenuHeader(
+                title: headerTitle,
+                subtitle: headerSubtitle,
+                leftTitle: leftActionTitle,
+                showsLeftAction: showsLeftAction,
+                rightTitle: focusedHome == nil ? nil : (isEditingDetail ? "Done" : "Edit"),
+                showsAddAndRefresh: focusedHome == nil,
+                leftAction: handleLeftAction,
+                rightAction: toggleDetailEdit,
+                addAction: {
+                    if selectedTab == .favorites {
+                        showsAddFavoriteSheet = true
+                        isEditingList = false
+                        return
+                    }
+                    focusedHome = nil
+                    selectedTab = .new
+                    isEditingList = false
+                },
+                refreshAction: { model.refresh() }
+            )
+
+            ScrollView {
+                Group {
+                    if let focusedHome {
+                        FocusedHomeView(
+                            home: focusedHome,
+                            isEditing: isEditingDetail,
+                            editedName: $editedName,
+                            launch: { target in model.launch(focusedHome.slug, target: target) },
+                            setPinned: { pinned in model.setHomePinned(focusedHome, pinned: pinned) },
+                            delete: {
+                                model.deleteHome(focusedHome)
+                                self.focusedHome = nil
+                                isEditingDetail = false
+                            },
+                            saveName: {
+                                model.renameHome(focusedHome, name: editedName)
+                                self.focusedHome = model.state.homes.first { $0.id == focusedHome.id } ?? focusedHome
+                            }
+                        )
+                    } else {
+                        tabContent
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
+            }
+            .frame(minHeight: 360, maxHeight: 560)
+
+            if focusedHome == nil {
+                PhoneTabBar(selectedTab: $selectedTab) {
+                    isEditingList = false
+                }
+            }
+        }
+        .frame(width: 390)
+        .onChange(of: selectedTab) { _ in
+            isEditingList = false
+        }
+        .onChange(of: focusedHome?.id) { _ in
+            editedName = focusedHome?.name ?? ""
+        }
+        .sheet(isPresented: $showsAddFavoriteSheet) {
+            AddFavoriteSheet()
+                .environmentObject(model)
+        }
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch selectedTab {
+        case .favorites:
+            FavoritesTab(
+                isEditing: isEditingList,
+                openDetail: openDetail,
+                openConsole: { openWindow(id: "console") }
+            )
+        case .recents:
+            RecentsTab(
+                isEditing: isEditingList,
+                openDetail: openDetail
+            )
+        case .homes:
+            HomesTab(
+                isEditing: isEditingList,
+                openDetail: openDetail
+            )
+        case .new:
+            NewHomeTab(
+                mode: $newHomeMode,
+                launchTarget: $newHomeLaunchTarget,
+                create: createNewHome
+            )
+        case .settings:
+            SettingsTab(
+                openConsole: { openWindow(id: "console") },
+                quit: { NSApplication.shared.terminate(nil) }
+            )
+        }
+    }
+
+    private var headerTitle: String {
+        focusedHome?.name ?? selectedTab.title
+    }
+
+    private var headerSubtitle: String {
+        focusedHome.map(kindLabel(for:)) ?? selectedTab.subtitle
+    }
+
+    private var showsLeftAction: Bool {
+        focusedHome != nil || [.favorites, .recents, .homes].contains(selectedTab)
+    }
+
+    private var leftActionTitle: String {
+        if focusedHome != nil {
+            return "‹ \(detailReturnTab.title)"
+        }
+        return isEditingList ? "Done" : "Edit"
+    }
+
+    private func handleLeftAction() {
+        if focusedHome != nil {
+            focusedHome = nil
+            isEditingDetail = false
+            selectedTab = detailReturnTab
+            return
+        }
+        if [.favorites, .recents, .homes].contains(selectedTab) {
+            isEditingList.toggle()
+        }
+    }
+
+    private func toggleDetailEdit() {
+        isEditingDetail.toggle()
+    }
+
+    private func openDetail(_ home: CodexHome) {
+        detailReturnTab = selectedTab
+        focusedHome = home
+        editedName = home.name
+        isEditingList = false
+        isEditingDetail = false
+    }
+
+    private func createNewHome() {
+        switch newHomeMode {
+        case .clone:
+            model.cloneWorkingSetup()
+        case .cleanRoom:
+            model.cleanRoom()
+        case .temporary:
+            model.createTemporaryHome()
+        case .configOnly:
+            model.cloneConfigOnly()
+        }
+    }
+}
+
+struct PhoneMenuHeader: View {
+    var title: String
+    var subtitle: String
+    var leftTitle: String
+    var showsLeftAction: Bool
+    var rightTitle: String?
+    var showsAddAndRefresh: Bool
+    var leftAction: () -> Void
+    var rightAction: () -> Void
+    var addAction: () -> Void
+    var refreshAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Button(leftTitle, action: leftAction)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.blue)
+                    .opacity(showsLeftAction ? 1 : 0)
+                    .disabled(!showsLeftAction)
+                Spacer()
+                if let rightTitle {
+                    Button(rightTitle, action: rightAction)
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.blue)
+                } else if showsAddAndRefresh {
+                    Button(action: addAction) {
+                        Image(systemName: "plus")
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    Button(action: refreshAction) {
+                        Image(systemName: "arrow.clockwise")
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.title2.weight(.bold))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+    }
+}
+
+struct PhoneTabBar: View {
+    @Binding var selectedTab: MenuTab
+    var onSelect: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(MenuTab.allCases) { tab in
+                Button {
+                    selectedTab = tab
+                    onSelect()
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: tab.symbol)
+                            .font(.system(size: 16, weight: .semibold))
+                        Text(tab.title == "New Home" ? "New" : tab.title)
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .foregroundStyle(selectedTab == tab ? .blue : .secondary)
+                    .background(selectedTab == tab ? Color.blue.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .overlay(alignment: .top) {
+            Divider()
+        }
+    }
+}
+
+struct FavoritesTab: View {
+    @EnvironmentObject var model: HomeportModel
+    var isEditing: Bool
+    var openDetail: (CodexHome) -> Void
+    var openConsole: () -> Void
+
+    var favoriteHomes: [CodexHome] {
+        if model.pinnedHomes.isEmpty {
+            return Array(model.state.homes.prefix(1))
+        }
+        return model.pinnedHomes
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            DefaultLaunchCard()
+            SectionLabel("Favorites")
+            if favoriteHomes.isEmpty {
+                EmptyState(title: "No homes yet", subtitle: "Create or pin homes to put them here.")
+            } else {
+                ForEach(favoriteHomes) { home in
+                    HomeListRow(
+                        home: home,
+                        subtitle: model.isPinned(home) ? "Favorite • \(kindLabel(for: home))" : "Main home • not pinned yet",
+                        isEditing: isEditing,
+                        openDetail: { openDetail(home) },
+                        launch: { target in model.launch(home.slug, target: target) }
+                    )
+                }
+            }
+            if let recent = model.recentInstances.first {
+                SectionLabel("Recent")
+                RecentLaunchRow(instance: recent, isEditing: isEditing)
+            }
+            LaunchHealthBanner()
+            Button("Open Console", action: openConsole)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+    }
+}
+
+struct AddFavoriteSheet: View {
+    @EnvironmentObject var model: HomeportModel
+    @Environment(\.dismiss) private var dismiss
+
+    private var unpinnedHomes: [CodexHome] {
+        model.state.homes.filter { !model.isPinned($0) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Codex Homeport")
-                        .font(.headline)
-                    Text(model.status)
+                    Text("Add Favorite")
+                        .font(.title3.weight(.bold))
+                    Text("Pick a home to pin on Favorites.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
                 }
                 Spacer()
-                Button {
-                    model.refresh()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+                Button("Cancel") {
+                    dismiss()
                 }
                 .buttonStyle(.borderless)
             }
 
-            FormSection(
-                title: "1. Open Codex Now",
-                help: "Use your remembered defaults, or pick the other common launch."
-            ) {
-                PrimaryLaunchButton(
-                    title: primaryTitle,
-                    subtitle: primarySubtitle,
-                    symbol: primarySymbol
-                ) {
-                    model.launchPreferred()
-                }
-
-                VStack(spacing: 6) {
-                    PlainActionButton(title: alternateTargetTitle, subtitle: alternateTargetSubtitle, symbol: alternateTargetSymbol) {
-                        model.launch("main", target: alternateTarget)
+            if unpinnedHomes.isEmpty {
+                EmptyState(title: "All homes are favorites", subtitle: "Create another home to add a new favorite.")
+            } else {
+                ForEach(unpinnedHomes) { home in
+                    Button {
+                        model.setHomePinned(home, pinned: true)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: icon(for: home))
+                                .frame(width: 24, height: 24)
+                                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(home.name)
+                                    .font(.caption.weight(.semibold))
+                                Text(kindLabel(for: home))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "star")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(10)
+                        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
                     }
-                    PlainActionButton(title: "Open a temporary Codex app", subtitle: "Uses a disposable home; you can review cleanup later", symbol: "timer") {
-                        model.launch("temp", target: .desktop)
-                    }
-                }
-            }
-
-            RecentMenuSection()
-
-            HomeLaunchSection()
-
-            Divider()
-
-            FormSection(
-                title: "2. Defaults",
-                help: "Change what the blue button does."
-            ) {
-                QuickOptions()
-            }
-
-            Divider()
-
-            FormSection(
-                title: "3. Make a New Home",
-                help: "New homes appear in Your Homes above."
-            ) {
-                CreateHomeSection()
-            }
-
-            if model.report.globalCodexHome != nil || !model.report.suspiciousLaunchers.isEmpty {
-                DiagnosticBanner()
-            }
-
-            HStack {
-                Button("Open Console") {
-                    openWindow(id: "console")
-                }
-                Spacer()
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
+                    .buttonStyle(.plain)
                 }
             }
         }
         .padding(16)
-    }
-
-    private var primaryTitle: String {
-        let home = model.state.preferences.launchTemporaryByDefault ? "Temporary" : "Main"
-        let surface = model.state.preferences.defaultLaunchTarget == .desktop ? "Codex" : "Terminal"
-        return "Open \(home) in \(surface)"
-    }
-
-    private var primarySubtitle: String {
-        let home = model.state.preferences.launchTemporaryByDefault ? "temporary" : "main"
-        let target = model.state.preferences.defaultLaunchTarget == .desktop ? "desktop app" : "terminal"
-        return "\(home) home • \(target)"
-    }
-
-    private var primarySymbol: String {
-        model.state.preferences.defaultLaunchTarget == .desktop ? "play.circle.fill" : "terminal.fill"
-    }
-
-    private var alternateTarget: LaunchTarget {
-        model.state.preferences.defaultLaunchTarget == .desktop ? .terminal : .desktop
-    }
-
-    private var alternateTargetTitle: String {
-        alternateTarget == .desktop ? "Open Main in the desktop app" : "Open Main in Terminal"
-    }
-
-    private var alternateTargetSubtitle: String {
-        alternateTarget == .desktop ? "Same main home, but in Codex.app" : "Same main home, but in a terminal window"
-    }
-
-    private var alternateTargetSymbol: String {
-        alternateTarget == .desktop ? "macwindow" : "terminal"
-    }
-}
-
-struct FormSection<Content: View>: View {
-    var title: String
-    var help: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text(help)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            content
-        }
-    }
-}
-
-struct PinnedMenuSection: View {
-    @EnvironmentObject var model: HomeportModel
-
-    var body: some View {
-        if !model.pinnedHomes.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Pinned")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                ForEach(model.pinnedHomes.prefix(3)) { home in
-                    CompactLaunchRow(
-                        title: home.name,
-                        subtitle: home.slug,
-                        symbol: "pin.fill",
-                        target: model.state.preferences.defaultLaunchTarget
-                    ) {
-                        model.launch(home.slug, target: model.state.preferences.defaultLaunchTarget)
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct RecentMenuSection: View {
-    @EnvironmentObject var model: HomeportModel
-
-    var body: some View {
-        if let instance = model.recentInstances.first {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Last Opened")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                CompactLaunchRow(
-                    title: instance.homeName,
-                    subtitle: "\(instance.target.rawValue) • \(relativeTime(instance.launchedAt))",
-                    symbol: instance.target == .desktop ? "macwindow" : "terminal",
-                    target: instance.target
-                ) {
-                    model.launchRecent(instance)
-                }
-            }
-        }
-    }
-
-    private func relativeTime(_ date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
-    }
-}
-
-struct HomeLaunchSection: View {
-    @EnvironmentObject var model: HomeportModel
-
-    private var managedHomes: [CodexHome] {
-        model.state.homes.filter { $0.kind != .main }
-    }
-
-    var body: some View {
-        if !managedHomes.isEmpty {
-            FormSection(
-                title: "Your Homes",
-                help: "Press a row to open one of the homes you created."
-            ) {
-                VStack(spacing: 6) {
-                    ForEach(managedHomes.prefix(4)) { home in
-                        HomeLaunchRow(home: home)
-                    }
-                    if managedHomes.count > 4 {
-                        Text("Open Console to see all \(managedHomes.count) created homes.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct HomeLaunchRow: View {
-    @EnvironmentObject var model: HomeportModel
-
-    var home: CodexHome
-
-    private var defaultTarget: LaunchTarget {
-        model.state.preferences.defaultLaunchTarget
-    }
-
-    private var otherTarget: LaunchTarget {
-        defaultTarget == .desktop ? .terminal : .desktop
-    }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Button {
-                model.launch(home.slug, target: defaultTarget)
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: icon(for: home))
-                        .frame(width: 18)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(home.name)
-                            .font(.caption.weight(.semibold))
-                            .lineLimit(1)
-                        Text("\(kindLabel(for: home)) • opens in \(defaultTargetLabel)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-
-            Button {
-                model.launch(home.slug, target: otherTarget)
-            } label: {
-                Image(systemName: otherTarget == .desktop ? "macwindow" : "terminal")
-                    .frame(width: 20)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("Open \(home.name) in \(otherTargetLabel)")
-        }
-    }
-
-    private var defaultTargetLabel: String {
-        defaultTarget == .desktop ? "Codex.app" : "Terminal"
-    }
-
-    private var otherTargetLabel: String {
-        otherTarget == .desktop ? "Codex.app" : "Terminal"
-    }
-
-    private func kindLabel(for home: CodexHome) -> String {
-        switch home.kind {
-        case .main: "Main home"
-        case .clone: "Copied home"
-        case .cleanRoom: "Fresh home"
-        case .temporary: "Temporary home"
-        }
+        .frame(width: 340)
     }
 
     private func icon(for home: CodexHome) -> String {
         switch home.kind {
-        case .main: "house"
+        case .main: "house.fill"
         case .clone: "square.on.square"
         case .cleanRoom: "sparkles"
         case .temporary: "timer"
@@ -524,231 +718,144 @@ struct HomeLaunchRow: View {
     }
 }
 
-struct CompactLaunchRow: View {
-    var title: String
-    var subtitle: String
-    var symbol: String
-    var target: LaunchTarget
-    var action: () -> Void
+struct DefaultLaunchCard: View {
+    @EnvironmentObject var model: HomeportModel
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: symbol)
-                    .frame(width: 20)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(2)
-                    Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer()
-                Text(target.rawValue)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-struct PrimaryLaunchButton: View {
-    var title: String
-    var subtitle: String
-    var symbol: String
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.title3)
-                    .frame(width: 28, height: 28)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+                    Text("Default Launch")
                         .font(.headline.weight(.semibold))
-                    Text(subtitle)
+                    Text("\(defaultHomeName) home • choose where it opens")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Image(systemName: "return")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-    }
-}
-
-struct SecondaryLaunchButton: View {
-    var title: String
-    var symbol: String
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: symbol)
-                .font(.caption.weight(.semibold))
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-    }
-}
-
-struct PlainActionButton: View {
-    var title: String
-    var subtitle: String
-    var symbol: String
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: symbol)
-                    .frame(width: 20)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(2)
-                    Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                LaunchActionPair { target in
+                    let selector = model.state.preferences.launchTemporaryByDefault ? "temp" : "main"
+                    model.launch(selector, target: target)
                 }
-                Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
+        .padding(14)
+        .background(Color.blue.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var defaultHomeName: String {
+        model.state.preferences.launchTemporaryByDefault ? "Temporary" : "Main"
     }
 }
 
-struct CreateHomeSection: View {
+struct RecentsTab: View {
     @EnvironmentObject var model: HomeportModel
+    var isEditing: Bool
+    var openDetail: (CodexHome) -> Void
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            CreateHomeButton(
-                title: "Make a saved copy of my current setup",
-                subtitle: "Uses the copy preset selected above",
-                symbol: "square.on.square"
-            ) {
-                model.cloneWorkingSetup()
-            }
-
-            CreateHomeButton(
-                title: "Make a saved empty home",
-                subtitle: "Starts fresh and stays in your list",
-                symbol: "sparkles"
-            ) {
-                model.cleanRoom()
-            }
-
-            CreateHomeButton(
-                title: "Make a temporary test home",
-                subtitle: "Starts fresh and is meant to be cleaned up later",
-                symbol: "timer"
-            ) {
-                model.createTemporaryHome()
-            }
-        }
+    var pending: [LaunchedInstance] {
+        model.state.instances.filter(\.cleanupReviewRequired)
     }
-}
-
-struct CreateHomeButton: View {
-    var title: String
-    var subtitle: String
-    var symbol: String
-    var action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol)
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                    Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+        VStack(alignment: .leading, spacing: 12) {
+            SectionLabel("Recent Opens")
+            if model.recentInstances.isEmpty {
+                EmptyState(title: "No recents", subtitle: "Launch a home and it will appear here.")
+            } else {
+                ForEach(model.recentInstances) { instance in
+                    RecentLaunchRow(instance: instance, isEditing: isEditing)
                 }
-                Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .help("\(title): \(subtitle)")
-    }
-}
-
-struct LaunchTile: View {
-    var title: String
-    var subtitle: String
-    var symbol: String
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.title3)
-                    .frame(width: 28, height: 28)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            if !pending.isEmpty {
+                SectionLabel("Cleanup Review")
+                ForEach(pending) { instance in
+                    CleanupReviewRow(instance: instance)
                 }
-                Spacer()
-                Image(systemName: "arrow.up.forward")
-                    .foregroundStyle(.secondary)
             }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .padding(10)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
-struct DiagnosticBanner: View {
+struct HomesTab: View {
     @EnvironmentObject var model: HomeportModel
+    var isEditing: Bool
+    var openDetail: (CodexHome) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Launch environment needs attention", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption.weight(.semibold))
-            Text("Homeport found a global CODEX_HOME or an older Desktop launcher that can open the wrong Codex state.")
-                .font(.caption)
+        VStack(alignment: .leading, spacing: 12) {
+            SectionLabel("All Homes")
+            ForEach(model.state.homes) { home in
+                HomeListRow(
+                    home: home,
+                    subtitle: "\(model.isPinned(home) ? "Favorite" : "Not favorite") • \(kindLabel(for: home))",
+                    isEditing: isEditing,
+                    openDetail: { openDetail(home) },
+                    launch: { target in model.launch(home.slug, target: target) }
+                )
+            }
+            Text("Tap a row for details. App and Term are always one-tap launch actions.")
+                .font(.caption2)
                 .foregroundStyle(.secondary)
-            Button("Repair Launch Environment") {
-                model.repair()
-            }
         }
-        .padding(10)
-        .background(Color.orange.opacity(0.16), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
-struct QuickOptions: View {
+struct NewHomeTab: View {
     @EnvironmentObject var model: HomeportModel
+    @Binding var mode: NewHomeMode
+    @Binding var launchTarget: LaunchTarget
+    var create: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionLabel("Create")
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(NewHomeMode.allCases) { candidate in
+                    NewHomeModeButton(mode: candidate, isSelected: mode == candidate) {
+                        mode = candidate
+                        if candidate == .configOnly {
+                            model.setDefaultClonePreset(.configOnly)
+                        }
+                    }
+                }
+            }
+            SectionLabel("Opens In")
+            Picker("Opens In", selection: $launchTarget) {
+                Text("Desktop App").tag(LaunchTarget.desktop)
+                Text("Terminal").tag(LaunchTarget.terminal)
+            }
+            .pickerStyle(.segmented)
+            if mode.showsCloneOptions {
+                SectionLabel("Clone Includes")
+                CloneIncludeToggles()
+            }
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mode.title)
+                        .font(.caption.weight(.semibold))
+                    Text(mode.showsCloneOptions ? "Copy options apply to this saved home." : "No copy options needed.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Create", action: create)
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(12)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+}
+
+struct SettingsTab: View {
+    @EnvironmentObject var model: HomeportModel
+    var openConsole: () -> Void
+    var quit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            LaunchHealthBanner()
+            SectionLabel("Defaults")
             Picker("Open main in", selection: Binding(
                 get: { model.state.preferences.defaultLaunchTarget },
                 set: { model.setDefaultLaunchTarget($0) }
@@ -757,31 +864,257 @@ struct QuickOptions: View {
                 Text("Terminal").tag(LaunchTarget.terminal)
             }
             .pickerStyle(.segmented)
-
             Toggle("Prefer temporary launches", isOn: Binding(
                 get: { model.state.preferences.launchTemporaryByDefault },
                 set: { model.setLaunchTemporaryByDefault($0) }
             ))
+            Toggle("Install app by default", isOn: .constant(model.state.preferences.installAppByDefault))
+                .disabled(true)
+            SectionLabel("Install")
+            InfoCard(title: "Update Homeport", subtitle: "npm install -g codex-homeport@latest")
+            HStack {
+                Button("Open Console", action: openConsole)
+                Spacer()
+                Button("Quit", action: quit)
+            }
+            .buttonStyle(.bordered)
+            Button("Reset Defaults") {
+                model.resetDefaults()
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+}
 
-            Picker("Copy preset", selection: Binding(
-                get: { model.state.preferences.defaultClonePreset },
-                set: { model.setDefaultClonePreset($0) }
-            )) {
-                ForEach(ClonePreset.allCases, id: \.self) { preset in
-                    Text(preset.displayName).tag(preset)
+struct FocusedHomeView: View {
+    @EnvironmentObject var model: HomeportModel
+    var home: CodexHome
+    var isEditing: Bool
+    @Binding var editedName: String
+    var launch: (LaunchTarget) -> Void
+    var setPinned: (Bool) -> Void
+    var delete: () -> Void
+    var saveName: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(spacing: 10) {
+                Image(systemName: icon(for: home))
+                    .font(.largeTitle)
+                    .frame(width: 64, height: 64)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 18))
+                Text(home.name)
+                    .font(.title2.weight(.bold))
+                Text("\(kindLabel(for: home)) • \(model.isPinned(home) ? "Favorite" : "Not favorite")")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                LaunchActionPair(launch: launch)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(14)
+            .background(.background, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(.quaternary))
+
+            SectionLabel("Home")
+            InfoCard(title: "Path", subtitle: home.homePath)
+            InfoCard(title: "Copy Source", subtitle: home.sourceHomePath ?? (home.kind == .main ? "This is your main Codex home" : "No inherited files"))
+
+            SectionLabel("Manage")
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Favorite", isOn: Binding(
+                    get: { model.isPinned(home) },
+                    set: { setPinned($0) }
+                ))
+                if isEditing && home.kind != .main {
+                    HStack {
+                        TextField("Name", text: $editedName)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Save", action: saveName)
+                            .disabled(editedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || editedName == home.name)
+                    }
+                    Button("Review Delete", role: .destructive, action: delete)
+                        .buttonStyle(.bordered)
+                } else if home.kind == .main {
+                    Text("The main home cannot be deleted.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
+            .padding(12)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
 
-            HStack {
-                Text("Detailed copy checkboxes are in Console.")
+    private func icon(for home: CodexHome) -> String {
+        switch home.kind {
+        case .main: "house.fill"
+        case .clone: "square.on.square"
+        case .cleanRoom: "sparkles"
+        case .temporary: "timer"
+        }
+    }
+}
+
+struct HomeListRow: View {
+    var home: CodexHome
+    var subtitle: String
+    var isEditing: Bool
+    var openDetail: () -> Void
+    var launch: (LaunchTarget) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if isEditing {
+                Image(systemName: "minus.circle.fill")
+                    .foregroundStyle(.red)
+                    .frame(width: 20)
+            }
+            Button(action: openDetail) {
+                HStack(spacing: 10) {
+                    Image(systemName: icon(for: home))
+                        .frame(width: 24, height: 24)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(home.name)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            LaunchActionPair(launch: launch)
+                .opacity(isEditing ? 0.45 : 1)
+        }
+        .padding(10)
+        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+    }
+
+    private func icon(for home: CodexHome) -> String {
+        switch home.kind {
+        case .main: "house.fill"
+        case .clone: "square.on.square"
+        case .cleanRoom: "sparkles"
+        case .temporary: "timer"
+        }
+    }
+}
+
+struct RecentLaunchRow: View {
+    @EnvironmentObject var model: HomeportModel
+    var instance: LaunchedInstance
+    var isEditing: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if isEditing {
+                Image(systemName: "minus.circle.fill")
+                    .foregroundStyle(.red)
+                    .frame(width: 20)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(instance.homeName) • \(targetLabel(instance.target))")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Text("\(relativeTime(instance.launchedAt)) • \(instance.workspacePath ?? "no workspace")")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            LaunchActionPair { target in
+                model.launchRecent(instance, target: target)
+            }
+            .opacity(isEditing ? 0.45 : 1)
+        }
+        .padding(10)
+        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+    }
+}
+
+struct CleanupReviewRow: View {
+    @EnvironmentObject var model: HomeportModel
+    var instance: LaunchedInstance
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(instance.homeName)
+                        .font(.caption.weight(.semibold))
+                    Text("Disposable home • review before moving to Trash")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
-                Button("Reset") {
-                    model.resetDefaults()
+                LaunchActionPair { target in
+                    model.launchRecent(instance, target: target)
                 }
             }
+            HStack {
+                Button("Promote") {
+                    model.promote(instance)
+                }
+                Button("Review Delete", role: .destructive) {
+                    model.cleanup(instance)
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
+        .padding(10)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct LaunchActionPair: View {
+    var launch: (LaunchTarget) -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button("App") {
+                launch(.desktop)
+            }
+            .help("Open in Codex app")
+            Button("Term") {
+                launch(.terminal)
+            }
+            .help("Open in Terminal")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+}
+
+struct NewHomeModeButton: View {
+    var mode: NewHomeMode
+    var isSelected: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(mode.title, systemImage: mode.symbol)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(2)
+                Text(mode.subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+            .frame(maxWidth: .infinity, minHeight: 82, alignment: .topLeading)
+            .padding(10)
+            .background(isSelected ? Color.blue.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(isSelected ? Color.blue.opacity(0.35) : Color.secondary.opacity(0.15)))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -789,29 +1122,28 @@ struct CloneIncludeToggles: View {
     @EnvironmentObject var model: HomeportModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Checked items will be copied into a saved copy:")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                helperButton("Working", .workingSetup)
+                helperButton("Clone", .workingSetup)
                 helperButton("Config", .configOnly)
-                helperButton("All", .allIncluded)
-                helperButton("None", .empty)
+                helperButton("Empty", .empty)
             }
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 6) {
-                toggle("config", \.config)
-                toggle("auth", \.auth)
-                toggle("skills", \.skills)
-                toggle("plugins", \.plugins)
-                toggle("agents", \.agents)
-                toggle("prompts", \.prompts)
-                toggle("rules", \.rules)
-                toggle("profiles", \.profiles)
-                toggle("memories", \.memories)
-                toggle("browser", \.browserSupport)
-                toggle("sessions", \.sessionsAndLogs)
-                toggle("everything", \.everything, expandsAll: true)
+            CopyGroup(title: "Safe Defaults") {
+                toggle("Config", \.config)
+                toggle("Skills", \.skills)
+                toggle("Plugins", \.plugins)
+                toggle("Prompts", \.prompts)
+                toggle("Rules", \.rules)
+                toggle("Profiles", \.profiles)
+            }
+            CopyGroup(title: "Identity And Browser", warning: true) {
+                toggle("Auth", \.auth)
+                toggle("Browser", \.browserSupport)
+                toggle("Agents", \.agents)
+                toggle("Memories", \.memories)
+            }
+            CopyGroup(title: "History", warning: true) {
+                toggle("Sessions and logs", \.sessionsAndLogs)
             }
         }
     }
@@ -829,23 +1161,141 @@ struct CloneIncludeToggles: View {
 
     private func toggle(
         _ label: String,
-        _ keyPath: WritableKeyPath<CloneOptions, Bool>,
-        expandsAll: Bool = false
+        _ keyPath: WritableKeyPath<CloneOptions, Bool>
     ) -> some View {
         Toggle(label, isOn: Binding(
             get: { model.state.preferences.cloneOptions[keyPath: keyPath] },
             set: { value in
                 model.updateCloneOptions { options in
-                    if expandsAll, value {
-                        options = .allIncluded
-                    } else {
-                        options[keyPath: keyPath] = value
+                    options[keyPath: keyPath] = value
+                    if !value {
+                        options.everything = false
                     }
                 }
             }
         ))
         .font(.caption)
     }
+}
+
+struct CopyGroup<Content: View>: View {
+    var title: String
+    var warning = false
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title.uppercased())
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 4) {
+                content
+            }
+            if warning {
+                Text("These may carry account identity, remembered context, or history.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(warning ? Color.orange.opacity(0.12) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+struct LaunchHealthBanner: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var body: some View {
+        if model.report.globalCodexHome != nil || !model.report.suspiciousLaunchers.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Launch environment needs attention", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption.weight(.semibold))
+                Text("Homeport found state that can open the wrong Codex home.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Button("Repair Launch Environment") {
+                    model.repair()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(10)
+            .background(Color.orange.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
+        } else {
+            InfoCard(title: "Launch health appears good", subtitle: "No global CODEX_HOME or stale launcher was detected.")
+        }
+    }
+}
+
+struct InfoCard: View {
+    var title: String
+    var subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct EmptyState: View {
+    var title: String
+    var subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct SectionLabel: View {
+    var title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(.secondary)
+            .padding(.top, 4)
+    }
+}
+
+private func kindLabel(for home: CodexHome) -> String {
+    switch home.kind {
+    case .main: "Normal home"
+    case .clone: "Copied home"
+    case .cleanRoom: "Clean room"
+    case .temporary: "Temporary home"
+    }
+}
+
+private func targetLabel(_ target: LaunchTarget) -> String {
+    target == .desktop ? "Desktop App" : "Terminal"
+}
+
+private func relativeTime(_ date: Date) -> String {
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .abbreviated
+    return formatter.localizedString(for: date, relativeTo: Date())
 }
 
 struct HomeportConsoleView: View {

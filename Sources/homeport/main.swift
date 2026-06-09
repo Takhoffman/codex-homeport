@@ -17,6 +17,11 @@ func run(_ arguments: [String]) throws {
         return
     }
 
+    if command == "--version" || command == "-v" {
+        printVersion()
+        return
+    }
+
     if command == "help" {
         printHelp(topic: arguments.dropFirst().first)
         return
@@ -52,6 +57,8 @@ func run(_ arguments: [String]) throws {
         try review()
     case "repair":
         try repair()
+    case "version":
+        printVersion()
     case "install":
         try install(Array(arguments.dropFirst()))
     case "update":
@@ -265,13 +272,17 @@ func repair() throws {
     print("Cleared GUI CODEX_HOME.")
 }
 
+func printVersion() {
+    print("Codex Homeport \(AppVersion.version) (\(AppVersion.build))")
+}
+
 func install(_ arguments: [String]) throws {
     let repo = try packageRoot(from: option(arguments, "--repo"))
     let installDirectory = URL(fileURLWithPath: option(arguments, "--prefix") ?? "\(NSHomeDirectory())/bin")
     let includeApp = arguments.contains("--with-app")
     let appDirectory = URL(fileURLWithPath: option(arguments, "--app-dir") ?? "\(NSHomeDirectory())/Applications")
 
-    print("Installing Codex Homeport from \(repo.path)")
+    print("Installing Codex Homeport \(AppVersion.version) from \(repo.path)")
     try runProcess("swift", ["build", "--package-path", repo.path, "-c", "release", "--product", "homeport"])
     try FileManager.default.createDirectory(at: installDirectory, withIntermediateDirectories: true)
 
@@ -294,6 +305,9 @@ func install(_ arguments: [String]) throws {
 func update(_ arguments: [String]) throws {
     let repo = try packageRoot(from: option(arguments, "--repo"))
     let skipPull = arguments.contains("--no-pull")
+    let appPath = installedAppPath(arguments)
+    let shouldInstallApp = arguments.contains("--with-app") || FileManager.default.fileExists(atPath: appPath.path)
+    let shouldRestart = shouldInstallApp && !arguments.contains("--no-restart") && isHomeportAppRunning()
 
     if !skipPull, FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git").path) {
         print("Updating source repo: \(repo.path)")
@@ -304,7 +318,15 @@ func update(_ arguments: [String]) throws {
         print("No git repo found; skipping git pull.")
     }
 
-    try install(arguments.filter { $0 != "--no-pull" })
+    var installArguments = arguments.filter { $0 != "--no-pull" && $0 != "--no-restart" }
+    if shouldInstallApp && !installArguments.contains("--with-app") {
+        installArguments.append("--with-app")
+    }
+    try install(installArguments)
+
+    if shouldRestart {
+        try restart(arguments)
+    }
 }
 
 func buildAppBundle(repo: URL) throws -> URL {
@@ -338,9 +360,9 @@ func buildAppBundle(repo: URL) throws -> URL {
       <key>CFBundlePackageType</key>
       <string>APPL</string>
       <key>CFBundleShortVersionString</key>
-      <string>0.1.0</string>
+      <string>\(AppVersion.version)</string>
       <key>CFBundleVersion</key>
-      <string>1</string>
+      <string>\(AppVersion.build)</string>
       <key>LSMinimumSystemVersion</key>
       <string>13.0</string>
       <key>LSUIElement</key>
@@ -570,6 +592,21 @@ func installedAppPath(_ arguments: [String]) -> URL {
     return appDirectory.appendingPathComponent("Codex Homeport.app")
 }
 
+func isHomeportAppRunning() -> Bool {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["pgrep", "-f", "Codex Homeport.app/Contents/MacOS/Codex Homeport"]
+    process.standardOutput = Pipe()
+    process.standardError = Pipe()
+    do {
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    } catch {
+        return false
+    }
+}
+
 func launchAgentPlist() -> URL {
     URL(fileURLWithPath: "\(NSHomeDirectory())/Library/LaunchAgents/com.takhoffman.codex-homeport.plist")
 }
@@ -618,8 +655,11 @@ func packageRoot(from explicitPath: String?) throws -> URL {
         current = parent
     }
 
-    let fallback = URL(fileURLWithPath: "\(NSHomeDirectory())/github.com/Takhoffman/codex-homeport")
-    if FileManager.default.fileExists(atPath: fallback.appendingPathComponent("Package.swift").path) {
+    let fallbackRoots = [
+        URL(fileURLWithPath: "\(NSHomeDirectory())/Library/Application Support/CodexHomeport/Source"),
+        URL(fileURLWithPath: "\(NSHomeDirectory())/github.com/Takhoffman/codex-homeport")
+    ]
+    for fallback in fallbackRoots where FileManager.default.fileExists(atPath: fallback.appendingPathComponent("Package.swift").path) {
         return fallback
     }
 
@@ -732,6 +772,7 @@ func printHelp(topic: String? = nil) {
     case "cleanup": print(cleanupHelp())
     case "promote": print(promoteHelp())
     case "repair": print(repairHelp())
+    case "version": print(versionHelp())
     case "install": print(installHelp())
     case "update": print(updateHelp())
     case "start": print(startHelp())
@@ -768,7 +809,8 @@ Daily commands:
 Setup commands:
   onboard      Install CLI/app, configure defaults, enable autostart, start app
   install      Build and install the CLI, optionally the menu bar app
-  update       Pull latest source and reinstall
+  update       Pull latest source, reinstall, and restart the app when needed
+  version      Show installed Homeport version
   start        Open the installed menu bar app
   restart      Quit and reopen the installed menu bar app
   configure    Change terminal, workspace, or autostart preferences
@@ -1009,7 +1051,7 @@ This is useful after an old launcher poisoned future GUI Codex launches.
 func installHelp() -> String { """
 homeport install
 
-Build and install Homeport.
+Build and install Homeport from a source checkout.
 
 Usage:
   homeport install [--prefix PATH] [--with-app] [--app-dir PATH] [--repo PATH]
@@ -1029,18 +1071,31 @@ Examples:
 func updateHelp() -> String { """
 homeport update
 
-Fast-forward the source repo and reinstall Homeport.
+Fast-forward the source repo, reinstall Homeport, and restart the menu bar app
+when it is already installed and running.
 
 Usage:
   homeport update [--prefix PATH] [--with-app] [--app-dir PATH] [--repo PATH] [--no-pull]
 
 Options:
-  --no-pull    Skip git pull and rebuild from the current checkout.
+  --with-app      Install the menu bar app. This is automatic when the app exists.
+  --no-pull       Skip git pull and rebuild from the current checkout.
+  --no-restart    Reinstall without restarting a running menu bar app.
 
 Examples:
   homeport update
   homeport update --with-app
   homeport update --no-pull --with-app
+""" }
+
+func versionHelp() -> String { """
+homeport version
+
+Show the installed Codex Homeport version.
+
+Usage:
+  homeport version
+  homeport --version
 """ }
 
 func startHelp() -> String { """

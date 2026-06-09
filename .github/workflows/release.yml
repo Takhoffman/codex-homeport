@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+      - name: Use npm with trusted publishing support
+        run: npm install -g npm@latest
+      - name: Verify version files match tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          SWIFT_VERSION="$(grep 'static let version' Sources/HomeportCore/AppVersion.swift | sed -E 's/.*= "([^"]+)".*/\1/')"
+          test "$VERSION" = "$PACKAGE_VERSION"
+          test "$VERSION" = "$SWIFT_VERSION"
+          test -f "releases/${GITHUB_REF_NAME}.md"
+      - name: Test
+        run: swift test
+      - name: Check package
+        run: npm pack --dry-run
+      - name: Publish npm
+        run: npm publish --access public --provenance
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --notes-file "releases/${GITHUB_REF_NAME}.md"
