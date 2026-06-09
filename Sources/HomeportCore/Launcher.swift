@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 public struct Launcher {
@@ -42,15 +43,13 @@ public struct Launcher {
         environment["CODEX_HOME"] = home.homePath
         process.environment = environment
         try process.run()
-        activateCodexApp()
+        activate(processID: process.processIdentifier)
         return process.processIdentifier
     }
 
-    private func activateCodexApp() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-a", "/Applications/Codex.app"]
-        try? process.run()
+    private func activate(processID: Int32) {
+        NSRunningApplication(processIdentifier: processID)?
+            .activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
     }
 
     private func launchTerminal(
