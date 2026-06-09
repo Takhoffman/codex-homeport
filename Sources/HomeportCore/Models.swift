@@ -138,6 +138,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
     public var version: Int
     public var homes: [CodexHome]
     public var instances: [LaunchedInstance]
+    public var pinnedHomeIDs: [UUID]
     public var preferredTerminal: TerminalApp
     public var lastWorkspacePath: String?
     public var preferences: HomeportPreferences
@@ -146,6 +147,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
         version: Int = 1,
         homes: [CodexHome] = [],
         instances: [LaunchedInstance] = [],
+        pinnedHomeIDs: [UUID] = [],
         preferredTerminal: TerminalApp = .terminal,
         lastWorkspacePath: String? = nil,
         preferences: HomeportPreferences = HomeportPreferences()
@@ -153,6 +155,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
         self.version = version
         self.homes = homes
         self.instances = instances
+        self.pinnedHomeIDs = pinnedHomeIDs
         self.preferredTerminal = preferredTerminal
         self.lastWorkspacePath = lastWorkspacePath
         self.preferences = preferences
@@ -162,6 +165,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
         case version
         case homes
         case instances
+        case pinnedHomeIDs
         case preferredTerminal
         case lastWorkspacePath
         case preferences
@@ -172,6 +176,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
         self.version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
         self.homes = try container.decodeIfPresent([CodexHome].self, forKey: .homes) ?? []
         self.instances = try container.decodeIfPresent([LaunchedInstance].self, forKey: .instances) ?? []
+        self.pinnedHomeIDs = try container.decodeIfPresent([UUID].self, forKey: .pinnedHomeIDs) ?? []
         self.preferredTerminal = try container.decodeIfPresent(TerminalApp.self, forKey: .preferredTerminal) ?? .terminal
         self.lastWorkspacePath = try container.decodeIfPresent(String.self, forKey: .lastWorkspacePath)
         self.preferences = try container.decodeIfPresent(HomeportPreferences.self, forKey: .preferences) ?? HomeportPreferences()
@@ -182,6 +187,7 @@ public struct HomeportState: Codable, Equatable, Sendable {
         try container.encode(version, forKey: .version)
         try container.encode(homes, forKey: .homes)
         try container.encode(instances, forKey: .instances)
+        try container.encode(pinnedHomeIDs, forKey: .pinnedHomeIDs)
         try container.encode(preferredTerminal, forKey: .preferredTerminal)
         try container.encodeIfPresent(lastWorkspacePath, forKey: .lastWorkspacePath)
         try container.encode(preferences, forKey: .preferences)

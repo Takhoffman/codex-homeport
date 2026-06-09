@@ -88,6 +88,18 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(renamed.slug, "new-name")
     }
 
+    func testPinningManagedHomePersists() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let home = try service.createCleanRoom(name: "Pinned Home")
+
+        try service.setHomePinned(id: home.id, pinned: true)
+        XCTAssertEqual(try service.loadState().pinnedHomeIDs, [home.id])
+
+        try service.setHomePinned(id: home.id, pinned: false)
+        XCTAssertTrue(try service.loadState().pinnedHomeIDs.isEmpty)
+    }
+
     private func makeTempRoot() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

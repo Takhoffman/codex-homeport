@@ -65,6 +65,18 @@ public final class HomeportService: @unchecked Sendable {
         try store.save(state)
     }
 
+    public func setHomePinned(id: UUID, pinned: Bool) throws {
+        var state = try store.load()
+        guard state.homes.contains(where: { $0.id == id }) else {
+            throw HomeportError.homeDoesNotExist(id.uuidString)
+        }
+        state.pinnedHomeIDs.removeAll { $0 == id }
+        if pinned {
+            state.pinnedHomeIDs.insert(id, at: 0)
+        }
+        try store.save(state)
+    }
+
     public func deleteHome(id: UUID) throws -> [URL] {
         var state = try store.load()
         guard let index = state.homes.firstIndex(where: { $0.id == id }) else {
@@ -77,6 +89,7 @@ public final class HomeportService: @unchecked Sendable {
         let targets = copier.cleanupTargets(for: home)
         try copier.cleanup(paths: targets)
         state.homes.remove(at: index)
+        state.pinnedHomeIDs.removeAll { $0 == id }
         for instanceIndex in state.instances.indices where state.instances[instanceIndex].homeID == id {
             state.instances[instanceIndex].status = .cleaned
             state.instances[instanceIndex].cleanupReviewRequired = false

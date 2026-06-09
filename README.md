@@ -51,6 +51,12 @@ swift run CodexHomeportApp
 
 The menu bar app provides quick launch buttons, diagnostics, clone creation, clean-room creation, and cleanup review.
 
+The menu keeps pinned homes and recent launches close at hand:
+
+- Pin homes from the Console to keep them at the top of the menu.
+- Relaunch recent desktop or terminal sessions from the menu or Console.
+- Recents are based on Homeport launch history and survive app restarts.
+
 To install, configure autostart, and open the app:
 
 ```sh

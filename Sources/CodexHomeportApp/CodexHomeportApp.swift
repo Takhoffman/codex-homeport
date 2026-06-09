@@ -34,6 +34,16 @@ final class HomeportModel: ObservableObject {
         report.globalCodexHome == nil && report.suspiciousLaunchers.isEmpty ? "sailboat" : "exclamationmark.triangle"
     }
 
+    var pinnedHomes: [CodexHome] {
+        state.pinnedHomeIDs.compactMap { id in
+            state.homes.first { $0.id == id }
+        }
+    }
+
+    var recentInstances: [LaunchedInstance] {
+        Array(state.instances.prefix(6))
+    }
+
     init() {
         refresh()
     }
@@ -63,6 +73,11 @@ final class HomeportModel: ObservableObject {
     func launchPreferred() {
         let selector = state.preferences.launchTemporaryByDefault ? "temp" : "main"
         launch(selector, target: state.preferences.defaultLaunchTarget)
+    }
+
+    func launchRecent(_ instance: LaunchedInstance) {
+        let selector = state.homes.first(where: { $0.id == instance.homeID })?.slug ?? instance.homeName
+        launch(selector, target: instance.target)
     }
 
     func cloneWorkingSetup() {
@@ -115,6 +130,20 @@ final class HomeportModel: ObservableObject {
         } catch {
             status = error.localizedDescription
         }
+    }
+
+    func setHomePinned(_ home: CodexHome, pinned: Bool) {
+        do {
+            try service.setHomePinned(id: home.id, pinned: pinned)
+            status = pinned ? "Pinned \(home.name)" : "Unpinned \(home.name)"
+            refresh()
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func isPinned(_ home: CodexHome) -> Bool {
+        state.pinnedHomeIDs.contains(home.id)
     }
 
     func cleanup(_ instance: LaunchedInstance) {
@@ -223,19 +252,14 @@ struct HomeportMenuView: View {
                 LaunchTile(title: "Launch Preferred", subtitle: preferredSubtitle, symbol: "play.circle") {
                     model.launchPreferred()
                 }
-                LaunchTile(title: "Main Desktop", subtitle: "~/.codex in Codex.app", symbol: "macwindow") {
-                    model.launch("main", target: .desktop)
-                }
-                LaunchTile(title: "Main Terminal", subtitle: "codex with ~/.codex", symbol: "terminal") {
-                    model.launch("main", target: .terminal)
-                }
                 LaunchTile(title: "Throwaway App", subtitle: "Temporary Codex.app, cleanup review", symbol: "timer") {
                     model.launch("temp", target: .desktop)
                 }
-                LaunchTile(title: "Temporary Terminal", subtitle: "Throwaway home, cleanup review", symbol: "sparkles") {
-                    model.launch("temp", target: .terminal)
-                }
             }
+
+            PinnedMenuSection()
+
+            RecentMenuSection()
 
             Divider()
 
@@ -275,6 +299,92 @@ struct HomeportMenuView: View {
     private var preferredSubtitle: String {
         let home = model.state.preferences.launchTemporaryByDefault ? "temporary" : "main"
         return "\(home), \(model.state.preferences.defaultLaunchTarget.rawValue)"
+    }
+}
+
+struct PinnedMenuSection: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var body: some View {
+        if !model.pinnedHomes.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Pinned")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(model.pinnedHomes.prefix(3)) { home in
+                    CompactLaunchRow(
+                        title: home.name,
+                        subtitle: home.slug,
+                        symbol: "pin.fill",
+                        target: model.state.preferences.defaultLaunchTarget
+                    ) {
+                        model.launch(home.slug, target: model.state.preferences.defaultLaunchTarget)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct RecentMenuSection: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var body: some View {
+        if !model.recentInstances.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Recents")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(model.recentInstances.prefix(3)) { instance in
+                    CompactLaunchRow(
+                        title: instance.homeName,
+                        subtitle: "\(instance.target.rawValue) • \(relativeTime(instance.launchedAt))",
+                        symbol: instance.target == .desktop ? "macwindow" : "terminal",
+                        target: instance.target
+                    ) {
+                        model.launchRecent(instance)
+                    }
+                }
+            }
+        }
+    }
+
+    private func relativeTime(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+struct CompactLaunchRow: View {
+    var title: String
+    var subtitle: String
+    var symbol: String
+    var target: LaunchTarget
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Text(target.rawValue)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -389,6 +499,8 @@ struct HomeportConsoleView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     ConsoleHeader()
+                    PinnedConsoleSection()
+                    RecentConsoleSection()
                     HomeGrid()
                     CleanupReview()
                     DiagnosticsPanel()
@@ -439,6 +551,12 @@ struct HomeCard: View {
                 Label(home.name, systemImage: icon(for: home))
                     .font(.headline)
                 Spacer()
+                Button {
+                    model.setHomePinned(home, pinned: !model.isPinned(home))
+                } label: {
+                    Image(systemName: model.isPinned(home) ? "pin.fill" : "pin")
+                }
+                .buttonStyle(.borderless)
                 Text(home.kind.rawValue)
                     .font(.caption)
                     .padding(.horizontal, 8)
@@ -496,6 +614,78 @@ struct HomeCard: View {
         case .cleanRoom: "sparkle.magnifyingglass"
         case .clone: "square.on.square"
         case .temporary: "timer"
+        }
+    }
+}
+
+struct PinnedConsoleSection: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var body: some View {
+        if !model.pinnedHomes.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Pinned")
+                    .font(.title2.weight(.semibold))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(model.pinnedHomes) { home in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Label(home.name, systemImage: "pin.fill")
+                                    .font(.headline)
+                                Text(home.slug)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                HStack {
+                                    Button("Desktop") {
+                                        model.launch(home.slug, target: .desktop)
+                                    }
+                                    Button("Terminal") {
+                                        model.launch(home.slug, target: .terminal)
+                                    }
+                                }
+                            }
+                            .frame(width: 240, alignment: .leading)
+                            .padding(12)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct RecentConsoleSection: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var body: some View {
+        if !model.recentInstances.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Recents")
+                    .font(.title2.weight(.semibold))
+                VStack(spacing: 8) {
+                    ForEach(model.recentInstances) { instance in
+                        HStack {
+                            Image(systemName: instance.target == .desktop ? "macwindow" : "terminal")
+                            VStack(alignment: .leading) {
+                                Text(instance.homeName)
+                                    .font(.headline)
+                                Text("\(instance.target.rawValue) • \(instance.workspacePath ?? "no workspace")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Button("Launch") {
+                                model.launchRecent(instance)
+                            }
+                        }
+                        .padding(10)
+                        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                    }
+                }
+            }
         }
     }
 }
