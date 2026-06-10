@@ -2,7 +2,7 @@ import SwiftUI
 import HomeportCore
 
 @main
-struct CodexHomeportApp: App {
+struct CodexMultihomeApp: App {
     @StateObject private var model = HomeportModel()
 
     var body: some Scene {
@@ -15,7 +15,7 @@ struct CodexHomeportApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Homeport Console", id: "console") {
+        Window("Multihome Console", id: "console") {
             HomeportConsoleView()
                 .environmentObject(model)
                 .frame(minWidth: 820, minHeight: 560)
@@ -353,7 +353,7 @@ final class HomeportModel: ObservableObject {
 
     func installUpdate() {
         guard updateAvailable else {
-            status = "No Homeport update is available"
+            status = "No Multihome update is available"
             return
         }
         isInstallingUpdate = true
@@ -403,7 +403,7 @@ final class HomeportModel: ObservableObject {
 
         isCheckingForUpdates = true
         if force {
-            status = "Checking for Homeport updates"
+            status = "Checking for Multihome updates"
         }
         let service = service
         let result = await Task.detached {
@@ -413,7 +413,7 @@ final class HomeportModel: ObservableObject {
         switch result {
         case .success(let updater):
             let hasUpdate = updater.updateAvailable()
-            refresh(statusMessage: hasUpdate ? "Homeport \(updater.latestVersion ?? "") is available" : "Homeport is up to date")
+            refresh(statusMessage: hasUpdate ? "Multihome \(updater.latestVersion ?? "") is available" : "Multihome is up to date")
             if hasUpdate && state.preferences.autoInstallUpdates {
                 installUpdate()
             }
@@ -831,9 +831,9 @@ struct UpdateAvailableBanner: View {
 
     private var versionText: String {
         if let latestVersion = model.state.updater.latestVersion {
-            return "Homeport \(latestVersion) is available"
+            return "Multihome \(latestVersion) is available"
         }
-        return "A newer Homeport is available"
+        return "A newer Multihome is available"
     }
 }
 
@@ -1343,7 +1343,7 @@ struct AutoUpdaterCard: View {
             ))
             .disabled(!model.state.preferences.autoUpdateChecksEnabled)
 
-            Text("Manual path: npm install -g codex-homeport@latest && homeport update --with-app")
+            Text("Manual path: npm install -g codex-multihome@latest && homeport update --with-app")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -1355,7 +1355,7 @@ struct AutoUpdaterCard: View {
 
     private var headline: String {
         if let latestVersion = model.state.updater.latestVersion, model.updateAvailable {
-            return "Homeport \(latestVersion) is available"
+            return "Multihome \(latestVersion) is available"
         }
         return "Auto Updater"
     }
@@ -1987,7 +1987,7 @@ struct LaunchHealthBanner: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Launch environment needs attention", systemImage: "exclamationmark.triangle.fill")
                     .font(.caption.weight(.semibold))
-                Text("Homeport found state that can open the wrong Codex home.")
+                Text("Multihome found state that can open the wrong Codex home.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Button("Repair Launch Environment") {
@@ -2092,7 +2092,7 @@ struct HomeportConsoleView: View {
                     }
                 }
             }
-            .navigationTitle("Homeport")
+            .navigationTitle("Multihome")
         } detail: {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -2140,7 +2140,7 @@ struct ConsoleHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Homeport Console")
+            Text("Multihome Console")
                 .font(.largeTitle.weight(.bold))
             Text("Launch, clone, inspect, and clean up Codex homes without leaking global environment state.")
                 .foregroundStyle(.secondary)

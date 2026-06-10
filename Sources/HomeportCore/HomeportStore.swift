@@ -19,6 +19,7 @@ public final class HomeportStore: @unchecked Sendable {
     }
 
     public func load() throws -> HomeportState {
+        try migrateLegacyStateIfNeeded()
         guard fileManager.fileExists(atPath: paths.stateFile.path) else {
             return HomeportState(homes: [mainHome()])
         }
@@ -49,5 +50,21 @@ public final class HomeportStore: @unchecked Sendable {
             clonePreset: nil,
             isTemporary: false
         )
+    }
+
+    private func migrateLegacyStateIfNeeded() throws {
+        guard !fileManager.fileExists(atPath: paths.stateFile.path),
+              fileManager.fileExists(atPath: paths.legacyStateFile.path),
+              paths.appSupportDirectory.path != paths.legacyAppSupportDirectory.path
+        else {
+            return
+        }
+
+        try fileManager.createDirectory(at: paths.appSupportDirectory.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if fileManager.fileExists(atPath: paths.appSupportDirectory.path) {
+            try fileManager.copyItem(at: paths.legacyStateFile, to: paths.stateFile)
+            return
+        }
+        try fileManager.moveItem(at: paths.legacyAppSupportDirectory, to: paths.appSupportDirectory)
     }
 }

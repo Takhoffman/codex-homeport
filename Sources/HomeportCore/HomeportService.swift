@@ -304,7 +304,7 @@ public final class HomeportService: @unchecked Sendable {
     public func installAvailableUpdate(now: Date = Date()) throws -> URL {
         var state = try store.load()
         guard state.updater.updateAvailable() else {
-            throw HomeportError.commandFailed("No Homeport update is available.")
+            throw HomeportError.commandFailed("No Multihome update is available.")
         }
         state.updater.installStartedAt = now
         state.updater.lastError = nil
@@ -410,13 +410,13 @@ public final class HomeportService: @unchecked Sendable {
             "zsh",
             [
                 "-lc",
-                "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"; npm view codex-homeport version --silent"
+                "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"; npm view codex-multihome version --silent"
             ],
             timeout: 30
         )
         let version = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !version.isEmpty else {
-            throw HomeportError.commandFailed("npm did not return a codex-homeport version.")
+            throw HomeportError.commandFailed("npm did not return a codex-multihome version.")
         }
         return version
     }
@@ -457,8 +457,8 @@ public final class HomeportService: @unchecked Sendable {
         let command = """
         set -e
         export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
-        npm install -g codex-homeport@latest
-        package_root="$(npm root -g)/codex-homeport"
+        npm install -g codex-multihome@latest
+        package_root="$(npm root -g)/codex-multihome"
         test -f "$package_root/Package.swift"
         homeport update --with-app --no-restart --repo "$package_root" --channel \(paths.channel.rawValue)
         """

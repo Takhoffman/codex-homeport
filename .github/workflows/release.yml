@@ -36,7 +36,7 @@ jobs:
         id: npm-version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          if npm view "codex-homeport@$VERSION" version >/dev/null 2>&1; then
+          if npm view "codex-multihome@$VERSION" version >/dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
           else
             echo "published=false" >> "$GITHUB_OUTPUT"

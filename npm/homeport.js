@@ -48,7 +48,7 @@ switch (command) {
     run(binary, withPackageRoot(args));
     break;
   case "update":
-    console.log("For npm installs, update Homeport with: npm install -g codex-homeport@latest");
+    console.log("For npm installs, update Multihome with: npm install -g codex-multihome@latest");
     run(binary, withPackageRoot(["install", "--with-app", ...args.slice(1)]));
     break;
   default:

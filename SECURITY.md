@@ -1,6 +1,6 @@
 # Security Policy
 
-Codex Homeport launches local Codex processes with explicit `CODEX_HOME` and app profile paths. It may copy local Codex configuration and, depending on the preset, authentication files.
+Codex Multihome launches local Codex processes with explicit `CODEX_HOME` and app profile paths. It may copy local Codex configuration and, depending on the preset, authentication files.
 
 ## Reporting
 
@@ -18,6 +18,6 @@ Security-sensitive changes include:
 
 ## Invariants
 
-- Homeport must never delete the main `~/.codex` directory.
-- Homeport must not persist global `CODEX_HOME` with `launchctl setenv`.
+- Multihome must never delete the main `~/.codex` directory.
+- Multihome must not persist global `CODEX_HOME` with `launchctl setenv`.
 - Temporary homes should be moved to Trash only through explicit cleanup or uninstall flags.

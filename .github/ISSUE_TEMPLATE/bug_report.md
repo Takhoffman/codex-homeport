@@ -16,7 +16,7 @@ assignees: ""
 
 - macOS version:
 - Swift version:
-- Codex Homeport version or commit:
+- Codex Multihome version or commit:
 - Codex CLI version:
 
 ## Logs or output

@@ -6,8 +6,8 @@ public enum HomeportChannel: String, Codable, CaseIterable, Sendable {
 
     public var appName: String {
         switch self {
-        case .live: "Codex Homeport"
-        case .dev: "Codex Homeport Dev"
+        case .live: "Codex Multihome"
+        case .dev: "Codex Multihome Dev"
         }
     }
 
@@ -17,12 +17,19 @@ public enum HomeportChannel: String, Codable, CaseIterable, Sendable {
 
     public var bundleIdentifier: String {
         switch self {
-        case .live: "com.takhoffman.codex-homeport"
-        case .dev: "com.takhoffman.codex-homeport.dev"
+        case .live: "com.takhoffman.codex-multihome"
+        case .dev: "com.takhoffman.codex-multihome.dev"
         }
     }
 
     public var appSupportName: String {
+        switch self {
+        case .live: "CodexMultihome"
+        case .dev: "CodexMultihomeDev"
+        }
+    }
+
+    public var legacyAppSupportName: String {
         switch self {
         case .live: "CodexHomeport"
         case .dev: "CodexHomeportDev"
@@ -76,6 +83,17 @@ public struct HomeportPaths: Sendable {
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
             .appendingPathComponent(channel.appSupportName, isDirectory: true)
+    }
+
+    public var legacyAppSupportDirectory: URL {
+        homeDirectory
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent(channel.legacyAppSupportName, isDirectory: true)
+    }
+
+    public var legacyStateFile: URL {
+        legacyAppSupportDirectory.appendingPathComponent("homeport.json")
     }
 
     public var profilesDirectory: URL {

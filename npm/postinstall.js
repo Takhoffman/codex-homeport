@@ -4,7 +4,7 @@ const { spawnSync } = require("node:child_process");
 const path = require("node:path");
 
 if (process.platform !== "darwin") {
-  console.error("Codex Homeport is a macOS app and only installs on macOS.");
+  console.error("Codex Multihome is a macOS app and only installs on macOS.");
   process.exit(1);
 }
 

@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-REPO_URL="${HOMEPORT_REPO_URL:-https://github.com/Takhoffman/codex-homeport.git}"
-SOURCE_DIR="${HOMEPORT_SOURCE_DIR:-$HOME/Library/Application Support/CodexHomeport/Source}"
+REPO_URL="${HOMEPORT_REPO_URL:-https://github.com/Takhoffman/codex-multihome.git}"
+SOURCE_DIR="${HOMEPORT_SOURCE_DIR:-$HOME/Library/Application Support/CodexMultihome/Source}"
 PREFIX="${HOMEPORT_INSTALL_DIR:-$HOME/bin}"
 APP_DIR="${HOMEPORT_APP_DIR:-$HOME/Applications}"
 
@@ -36,5 +36,5 @@ swift run --package-path "$SOURCE_DIR" homeport install \
 "$PREFIX/homeport" autostart enable --app-dir "$APP_DIR"
 "$PREFIX/homeport" restart --app-dir "$APP_DIR"
 
-echo "Codex Homeport is installed."
+echo "Codex Multihome is installed."
 echo "Update later with: $PREFIX/homeport update"

@@ -1,15 +1,15 @@
 {
-  "name": "codex-homeport",
-  "version": "0.6.0",
+  "name": "codex-multihome",
+  "version": "0.7.0",
   "description": "A macOS menu bar launcher and hygiene tool for managing multiple Codex homes.",
   "license": "MIT",
-  "homepage": "https://github.com/Takhoffman/codex-homeport#readme",
+  "homepage": "https://github.com/Takhoffman/codex-multihome#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Takhoffman/codex-homeport.git"
+    "url": "git+https://github.com/Takhoffman/codex-multihome.git"
   },
   "bugs": {
-    "url": "https://github.com/Takhoffman/codex-homeport/issues"
+    "url": "https://github.com/Takhoffman/codex-multihome/issues"
   },
   "keywords": [
     "codex",
@@ -19,11 +19,13 @@
     "swift"
   ],
   "bin": {
-    "homeport": "npm/homeport.js"
+    "homeport": "npm/homeport.js",
+    "multihome": "npm/homeport.js",
+    "codex-multihome": "npm/homeport.js"
   },
   "scripts": {
     "postinstall": "node npm/postinstall.js",
-    "build": "swift build -c release --product homeport && swift build -c release --product CodexHomeportApp",
+    "build": "swift build -c release --product homeport && swift build -c release --product CodexMultihomeApp",
     "release:check": "swift test && npm pack --dry-run",
     "test": "swift test"
   },

@@ -3,13 +3,13 @@
 import PackageDescription
 
 let package = Package(
-    name: "CodexHomeport",
+    name: "CodexMultihome",
     platforms: [
         .macOS(.v13)
     ],
     products: [
         .executable(name: "homeport", targets: ["homeport"]),
-        .executable(name: "CodexHomeportApp", targets: ["CodexHomeportApp"]),
+        .executable(name: "CodexMultihomeApp", targets: ["CodexMultihomeApp"]),
         .library(name: "HomeportCore", targets: ["HomeportCore"])
     ],
     targets: [
@@ -21,7 +21,7 @@ let package = Package(
             dependencies: ["HomeportCore"]
         ),
         .executableTarget(
-            name: "CodexHomeportApp",
+            name: "CodexMultihomeApp",
             dependencies: ["HomeportCore"]
         ),
         .testTarget(

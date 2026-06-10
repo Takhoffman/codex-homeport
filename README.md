@@ -1,8 +1,8 @@
-![Codex Homeport banner](docs/hero.png)
+![Codex Multihome banner](docs/hero.png)
 
-# Codex Homeport
+# Codex Multihome
 
-Codex Homeport is a macOS launcher and hygiene tool for running multiple Codex homes without losing track of which state you opened.
+Codex Multihome is a macOS launcher and hygiene tool for running multiple Codex homes without losing track of which state you opened.
 
 It can launch Codex as the desktop app or in a terminal session while setting `CODEX_HOME` only for that child process. It does not use `launchctl setenv CODEX_HOME`.
 
@@ -10,10 +10,10 @@ It can launch Codex as the desktop app or in a terminal session while setting `C
 
 - Main Codex home: `~/.codex`
 - Managed homes: `~/.codex-homes/<slug>`
-- Managed desktop profiles: `~/Library/Application Support/CodexHomeport/Profiles/<slug>`
-- Homeport state: `~/Library/Application Support/CodexHomeport/homeport.json`
+- Managed desktop profiles: `~/Library/Application Support/CodexMultihome/Profiles/<slug>`
+- Multihome state: `~/Library/Application Support/CodexMultihome/homeport.json`
 - Dev-channel managed homes: `~/.codex-homes-dev/<slug>`
-- Dev-channel state: `~/Library/Application Support/CodexHomeportDev/homeport.json`
+- Dev-channel state: `~/Library/Application Support/CodexMultihomeDev/homeport.json`
 
 ## Launch Modes
 
@@ -22,7 +22,7 @@ It can launch Codex as the desktop app or in a terminal session while setting `C
 - **Clone My Setup**: copies selected files from `~/.codex` or a managed home, with an optional safe symlink mode for shared customizations.
 - **Temporary**: creates a throwaway home and marks it for cleanup review.
 
-Temporary homes are not deleted immediately. Homeport shows what will be removed and lets you delete or promote the home.
+Temporary homes are not deleted immediately. Multihome shows what will be removed and lets you delete or promote the home.
 
 ## CLI
 
@@ -59,7 +59,7 @@ and sessions/logs are always copied or excluded.
 ## Menu Bar App
 
 ```sh
-swift run CodexHomeportApp
+swift run CodexMultihomeApp
 ```
 
 The menu bar app provides quick launch buttons, diagnostics, clone creation, clean-room creation, and cleanup review.
@@ -69,19 +69,19 @@ To run a dev menu bar app beside the live app:
 ```sh
 homeport install --with-app --channel dev
 homeport start --channel dev
-HOMEPORT_CHANNEL=dev swift run CodexHomeportApp
+HOMEPORT_CHANNEL=dev swift run CodexMultihomeApp
 ```
 
-The dev channel installs as `Codex Homeport Dev.app`, uses bundle ID
-`com.takhoffman.codex-homeport.dev`, embeds its dev channel in the app bundle,
-writes its own LaunchAgent, and keeps Homeport state and managed homes separate
+The dev channel installs as `Codex Multihome Dev.app`, uses bundle ID
+`com.takhoffman.codex-multihome.dev`, embeds its dev channel in the app bundle,
+writes its own LaunchAgent, and keeps Multihome state and managed homes separate
 from live. Use `HOMEPORT_CHANNEL=dev` only for `swift run` development.
 
 The menu keeps pinned homes and recent launches close at hand:
 
 - Pin homes from the Console to keep them at the top of the menu.
 - Relaunch recent desktop or terminal sessions from the menu or Console.
-- Recents are based on Homeport launch history and survive app restarts.
+- Recents are based on Multihome launch history and survive app restarts.
 
 ## Install And Update
 
@@ -90,7 +90,7 @@ during install, exposes the `homeport` command, and keeps the source package in
 npm's normal global package location.
 
 ```sh
-npm install -g codex-homeport
+npm install -g codex-multihome
 homeport install --with-app
 homeport start
 ```
@@ -98,7 +98,7 @@ homeport start
 To update:
 
 ```sh
-npm install -g codex-homeport@latest
+npm install -g codex-multihome@latest
 homeport update
 ```
 
@@ -111,7 +111,7 @@ version is available, and installs only after you choose Update unless automatic
 installs are enabled. Updates run the same safe path the app shows:
 
 ```sh
-npm install -g codex-homeport@latest
+npm install -g codex-multihome@latest
 homeport update --with-app
 ```
 
@@ -136,8 +136,8 @@ The older git-backed install script remains useful for source development:
 ```
 
 That script keeps a checkout at
-`~/Library/Application Support/CodexHomeport/Source`, installs the CLI to
-`~/bin/homeport`, installs the app to `~/Applications/Codex Homeport.app`,
+`~/Library/Application Support/CodexMultihome/Source`, installs the CLI to
+`~/bin/homeport`, installs the app to `~/Applications/Codex Multihome.app`,
 enables autostart, and starts the app.
 
 If the app is already installed, `homeport update` reinstalls it automatically;
@@ -165,9 +165,9 @@ git push origin main vX.Y.Z
 ```
 
 Pushing a `vX.Y.Z` tag runs the GitHub Release workflow. The workflow tests the
-package, publishes `codex-homeport` to npm using the `NPM_TOKEN` repository
+package, publishes `codex-multihome` to npm using the `NPM_TOKEN` repository
 secret, and creates a GitHub Release from `releases/vX.Y.Z.md`. Users update
-with `npm install -g codex-homeport@latest`.
+with `npm install -g codex-multihome@latest`.
 
 Autostart is managed by a user LaunchAgent:
 
@@ -196,7 +196,7 @@ homeport configure --show
 homeport configure --reset
 ```
 
-To uninstall the app and autostart entry while keeping Codex homes and Homeport state:
+To uninstall the app and autostart entry while keeping Codex homes and Multihome state:
 
 ```sh
 homeport uninstall
@@ -209,7 +209,7 @@ homeport uninstall --remove-cli --remove-state
 homeport uninstall --remove-managed-homes
 ```
 
-`--remove-managed-homes` moves `~/.codex-homes` to Trash, so use it only when you really want to remove cloned or temporary Codex homes. Your main `~/.codex` is never removed by Homeport.
+`--remove-managed-homes` moves `~/.codex-homes` to Trash, so use it only when you really want to remove cloned or temporary Codex homes. Your main `~/.codex` is never removed by Multihome.
 
 ## Clone Presets
 

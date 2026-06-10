@@ -577,11 +577,29 @@ final class HomeportCoreTests: XCTestCase {
         let live = HomeportPaths(homeDirectory: root, channel: .live)
         let dev = HomeportPaths(homeDirectory: root, channel: .dev)
 
-        XCTAssertEqual(live.appSupportDirectory.lastPathComponent, "CodexHomeport")
-        XCTAssertEqual(dev.appSupportDirectory.lastPathComponent, "CodexHomeportDev")
+        XCTAssertEqual(live.appSupportDirectory.lastPathComponent, "CodexMultihome")
+        XCTAssertEqual(dev.appSupportDirectory.lastPathComponent, "CodexMultihomeDev")
+        XCTAssertEqual(live.legacyAppSupportDirectory.lastPathComponent, "CodexHomeport")
+        XCTAssertEqual(dev.legacyAppSupportDirectory.lastPathComponent, "CodexHomeportDev")
         XCTAssertEqual(live.managedHomesDirectory.lastPathComponent, ".codex-homes")
         XCTAssertEqual(dev.managedHomesDirectory.lastPathComponent, ".codex-homes-dev")
         XCTAssertNotEqual(live.stateFile.path, dev.stateFile.path)
+    }
+
+    func testLoadMigratesLegacyHomeportStateDirectory() throws {
+        let root = try makeTempRoot()
+        let paths = HomeportPaths(homeDirectory: root)
+        try FileManager.default.createDirectory(at: paths.legacyAppSupportDirectory, withIntermediateDirectories: true)
+        let legacyState = HomeportState(pinnedHomeIDs: [HomeportStore.mainHomeID])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(legacyState).write(to: paths.legacyStateFile)
+
+        let state = try HomeportService(paths: paths).loadState()
+
+        XCTAssertEqual(state.pinnedHomeIDs, [HomeportStore.mainHomeID])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: paths.stateFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.legacyAppSupportDirectory.path))
     }
 
     func testChannelReadsEnvironmentBeforeBundleDefault() {
