@@ -160,53 +160,65 @@ final class HomeportModel: ObservableObject {
         launch(selector, target: target)
     }
 
-    func cloneWorkingSetup() {
+    @discardableResult
+    func cloneWorkingSetup() -> CodexHome? {
         do {
             let formatter = DateFormatter()
             formatter.dateFormat = "MMM d HH:mm"
-            _ = try service.clone(
+            let home = try service.clone(
                 name: "Working Setup \(formatter.string(from: Date()))",
                 preset: state.preferences.defaultClonePreset,
                 policies: state.preferences.clonePolicies,
                 sourceSelector: state.preferences.cloneSourceSelector
             )
-            refresh(statusMessage: "Created home: \(state.preferences.clonePolicies.summary)")
+            refresh(statusMessage: "Created \(home.name): \(home.clonePolicies?.summary ?? state.preferences.clonePolicies.summary)")
+            return home
         } catch {
             status = error.localizedDescription
+            return nil
         }
     }
 
-    func cloneConfigOnly() {
+    @discardableResult
+    func cloneConfigOnly() -> CodexHome? {
         do {
             let formatter = DateFormatter()
             formatter.dateFormat = "MMM d HH:mm"
-            _ = try service.clone(
+            let home = try service.clone(
                 name: "Config Copy \(formatter.string(from: Date()))",
                 preset: .configOnly,
                 policies: .configOnly,
                 sourceSelector: state.preferences.cloneSourceSelector
             )
-            refresh(statusMessage: "Created config-only home")
+            refresh(statusMessage: "Created \(home.name)")
+            return home
         } catch {
             status = error.localizedDescription
+            return nil
         }
     }
 
-    func cleanRoom() {
+    @discardableResult
+    func cleanRoom() -> CodexHome? {
         do {
-            _ = try service.createCleanRoom()
-            refresh(statusMessage: "Created fresh home")
+            let home = try service.createCleanRoom()
+            refresh(statusMessage: "Created \(home.name)")
+            return home
         } catch {
             status = error.localizedDescription
+            return nil
         }
     }
 
-    func createTemporaryHome() {
+    @discardableResult
+    func createTemporaryHome() -> CodexHome? {
         do {
-            _ = try service.createTemporary()
-            refresh(statusMessage: "Created temporary home")
+            let home = try service.createTemporary()
+            refresh(statusMessage: "Created \(home.name)")
+            return home
         } catch {
             status = error.localizedDescription
+            return nil
         }
     }
 
@@ -219,12 +231,15 @@ final class HomeportModel: ObservableObject {
         }
     }
 
-    func deleteHome(_ home: CodexHome) {
+    @discardableResult
+    func deleteHome(_ home: CodexHome) -> Bool {
         do {
             _ = try service.deleteHome(id: home.id)
             refresh(statusMessage: "Moved \(home.name) to Trash")
+            return true
         } catch {
             status = error.localizedDescription
+            return false
         }
     }
 
@@ -619,6 +634,7 @@ struct HomeportMenuView: View {
     @State private var newHomeMode: NewHomeMode = .clone
     @State private var newHomeLaunchTarget: LaunchTarget = .desktop
     @State private var showsAddFavoriteSheet = false
+    @State private var pendingDeleteHome: CodexHome?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -656,6 +672,12 @@ struct HomeportMenuView: View {
                 .padding(.bottom, 8)
             }
 
+            if model.status != "Ready" {
+                StatusBanner(message: model.status)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+            }
+
             ScrollView {
                 Group {
                     if let focusedHome {
@@ -669,9 +691,7 @@ struct HomeportMenuView: View {
                                 self.focusedHome = model.state.homes.first { $0.id == focusedHome.id } ?? focusedHome
                             },
                             delete: {
-                                model.deleteHome(focusedHome)
-                                self.focusedHome = nil
-                                isEditingDetail = false
+                                requestDelete(focusedHome)
                             },
                             saveName: {
                                 model.renameHome(focusedHome, name: editedName)
@@ -704,6 +724,24 @@ struct HomeportMenuView: View {
             AddFavoriteSheet()
                 .environmentObject(model)
         }
+        .confirmationDialog(
+            "Move \(pendingDeleteHome?.name ?? "home") to Trash?",
+            isPresented: Binding(
+                get: { pendingDeleteHome != nil },
+                set: { if !$0 { pendingDeleteHome = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDeleteHome
+        ) { home in
+            Button("Move \(home.name) to Trash", role: .destructive) {
+                deleteHome(home)
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteHome = nil
+            }
+        } message: { home in
+            Text("This removes the managed home and profile from Multihome and moves their files to Trash.")
+        }
     }
 
     @ViewBuilder
@@ -723,7 +761,8 @@ struct HomeportMenuView: View {
         case .homes:
             HomesTab(
                 isEditing: isEditingList,
-                openDetail: openDetail
+                openDetail: openDetail,
+                requestDelete: requestDelete
             )
         case .new:
             NewHomeTab(
@@ -783,16 +822,86 @@ struct HomeportMenuView: View {
     }
 
     private func createNewHome() {
+        let createdHome: CodexHome?
         switch newHomeMode {
         case .clone:
-            model.cloneWorkingSetup()
+            createdHome = model.cloneWorkingSetup()
         case .cleanRoom:
-            model.cleanRoom()
+            createdHome = model.cleanRoom()
         case .temporary:
-            model.createTemporaryHome()
+            createdHome = model.createTemporaryHome()
         case .configOnly:
-            model.cloneConfigOnly()
+            createdHome = model.cloneConfigOnly()
         }
+        guard let createdHome else {
+            return
+        }
+        model.launch(createdHome.slug, target: newHomeLaunchTarget)
+        let refreshedHome = model.state.homes.first { $0.id == createdHome.id } ?? createdHome
+        detailReturnTab = .homes
+        selectedTab = .homes
+        focusedHome = refreshedHome
+        editedName = refreshedHome.name
+        isEditingList = false
+        isEditingDetail = false
+    }
+
+    private func requestDelete(_ home: CodexHome) {
+        guard home.kind != .main else {
+            model.status = "The main ~/.codex home cannot be deleted."
+            return
+        }
+        pendingDeleteHome = home
+    }
+
+    private func deleteHome(_ home: CodexHome) {
+        let didDelete = model.deleteHome(home)
+        pendingDeleteHome = nil
+        if didDelete && focusedHome?.id == home.id {
+            focusedHome = nil
+            isEditingDetail = false
+            selectedTab = detailReturnTab
+        }
+    }
+}
+
+struct StatusBanner: View {
+    var message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(width: 22, height: 22)
+                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+            Text(message)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(tint.opacity(0.22)))
+    }
+
+    private var tint: Color {
+        isError ? .red : .blue
+    }
+
+    private var symbol: String {
+        isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+    }
+
+    private var isError: Bool {
+        let lowercasedMessage = message.lowercased()
+        return lowercasedMessage.contains("error")
+            || lowercasedMessage.contains("cannot")
+            || lowercasedMessage.contains("failed")
+            || lowercasedMessage.contains("missing")
+            || lowercasedMessage.contains("not found")
     }
 }
 
@@ -963,7 +1072,9 @@ struct FavoritesTab: View {
                         subtitle: "Favorite • \(kindLabel(for: home))",
                         isEditing: isEditing,
                         openDetail: { openDetail(home) },
-                        launch: { target in model.launch(home.slug, target: target) }
+                        launch: { target in model.launch(home.slug, target: target) },
+                        editAction: { model.setHomePinned(home, pinned: false) },
+                        editActionHelp: "Remove from Favorites"
                     )
                 }
             } else if let fallbackMainHome {
@@ -1137,6 +1248,7 @@ struct HomesTab: View {
     @EnvironmentObject var model: HomeportModel
     var isEditing: Bool
     var openDetail: (CodexHome) -> Void
+    var requestDelete: (CodexHome) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1147,7 +1259,9 @@ struct HomesTab: View {
                     subtitle: "\(model.isPinned(home) ? "Favorite" : "Not favorite") • \(kindLabel(for: home))",
                     isEditing: isEditing,
                     openDetail: { openDetail(home) },
-                    launch: { target in model.launch(home.slug, target: target) }
+                    launch: { target in model.launch(home.slug, target: target) },
+                    editAction: home.kind == .main ? nil : { requestDelete(home) },
+                    editActionHelp: home.kind == .main ? "Main home cannot be deleted" : "Review Delete"
                 )
             }
             Text("Tap a row for details. App and Term are always one-tap launch actions.")
@@ -1581,13 +1695,26 @@ struct HomeListRow: View {
     var isEditing: Bool
     var openDetail: () -> Void
     var launch: (LaunchTarget) -> Void
+    var editAction: (() -> Void)? = nil
+    var editActionHelp: String = "Edit"
 
     var body: some View {
         HStack(spacing: 8) {
             if isEditing {
-                Image(systemName: "minus.circle.fill")
-                    .foregroundStyle(.red)
-                    .frame(width: 20)
+                if let editAction {
+                    Button(action: editAction) {
+                        Image(systemName: "minus.circle.fill")
+                            .foregroundStyle(.red)
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .help(editActionHelp)
+                } else {
+                    Image(systemName: "lock.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                        .help(editActionHelp)
+                }
             }
             Button(action: openDetail) {
                 HStack(spacing: 10) {
