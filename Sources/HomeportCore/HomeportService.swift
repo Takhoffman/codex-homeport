@@ -52,8 +52,41 @@ public final class HomeportService: @unchecked Sendable {
     }
 
     public func clone(name: String, preset: ClonePreset, options: CloneOptions) throws -> CodexHome {
+        try clone(name: name, preset: preset, options: options, sourceSelector: "main", materialization: .copy)
+    }
+
+    public func clone(
+        name: String,
+        preset: ClonePreset,
+        options: CloneOptions,
+        sourceSelector: String,
+        materialization: CloneMaterialization
+    ) throws -> CodexHome {
+        try clone(
+            name: name,
+            preset: preset,
+            policies: ClonePolicies(options: options, materialization: materialization),
+            sourceSelector: sourceSelector
+        )
+    }
+
+    public func clone(
+        name: String,
+        preset: ClonePreset,
+        policies: ClonePolicies,
+        sourceSelector: String
+    ) throws -> CodexHome {
         let slug = uniqueSlug(base: slugify(name))
-        return try createManagedHome(name: name, slug: slug, kind: .clone, preset: preset, options: options, temporary: false)
+        let sourceURL = preset == .empty ? nil : try cloneSourceURL(selector: sourceSelector)
+        return try createManagedHome(
+            name: name,
+            slug: slug,
+            kind: .clone,
+            preset: preset,
+            policies: policies,
+            sourceURL: sourceURL,
+            temporary: false
+        )
     }
 
     public func renameHome(id: UUID, name: String) throws {
@@ -190,6 +223,42 @@ public final class HomeportService: @unchecked Sendable {
         diagnostics.report()
     }
 
+    public func authStatus(for home: CodexHome, verifyWithCLI: Bool = false) -> CodexAuthStatus {
+        diagnostics.authStatus(
+            in: URL(fileURLWithPath: home.homePath, isDirectory: true),
+            includeCLIStatus: verifyWithCLI
+        )
+    }
+
+    public func brokenLinkedTargets(for home: CodexHome) -> [String] {
+        let homeURL = URL(fileURLWithPath: home.homePath, isDirectory: true)
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: homeURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsSubdirectoryDescendants]
+        ) else {
+            return []
+        }
+        return contents.compactMap { item in
+            guard let target = try? fileManager.destinationOfSymbolicLink(atPath: item.path) else {
+                return nil
+            }
+            let targetURL: URL
+            if target.hasPrefix("/") {
+                targetURL = URL(fileURLWithPath: target)
+            } else {
+                targetURL = item.deletingLastPathComponent().appendingPathComponent(target).standardizedFileURL
+            }
+            return fileManager.fileExists(atPath: targetURL.path) ? nil : item.lastPathComponent
+        }.sorted()
+    }
+
+    public func brokenLinkedTargets(selector: String) throws -> [String] {
+        let state = try store.load()
+        let home = try resolveHome(selector: selector, in: state)
+        return brokenLinkedTargets(for: home)
+    }
+
     public func clearGlobalCodexHome() throws {
         try diagnostics.clearGlobalCodexHome()
     }
@@ -250,6 +319,9 @@ public final class HomeportService: @unchecked Sendable {
         kind: HomeKind,
         preset: ClonePreset,
         options: CloneOptions? = nil,
+        policies explicitPolicies: ClonePolicies? = nil,
+        sourceURL explicitSourceURL: URL? = nil,
+        materialization: CloneMaterialization = .copy,
         temporary: Bool
     ) throws -> CodexHome {
         try fileManager.createDirectory(at: paths.managedHomesDirectory, withIntermediateDirectories: true)
@@ -257,25 +329,38 @@ public final class HomeportService: @unchecked Sendable {
 
         let homeURL = paths.managedHomesDirectory.appendingPathComponent(slug, isDirectory: true)
         let profileURL = paths.profilesDirectory.appendingPathComponent(slug, isDirectory: true)
-        let sourceURL = preset == .empty ? nil : paths.mainCodexHome
-        try copier.createHome(destination: homeURL, source: sourceURL, options: options ?? .preset(preset))
-        try fileManager.createDirectory(at: profileURL, withIntermediateDirectories: true)
+        let sourceURL = preset == .empty ? nil : explicitSourceURL ?? paths.mainCodexHome
+        let policies = explicitPolicies ?? ClonePolicies(options: options ?? .preset(preset), materialization: materialization)
+        do {
+            try copier.createHome(
+                destination: homeURL,
+                source: sourceURL,
+                policies: policies
+            )
+            try fileManager.createDirectory(at: profileURL, withIntermediateDirectories: true)
 
-        let home = CodexHome(
-            name: name,
-            slug: slug,
-            kind: kind,
-            homePath: homeURL.path,
-            profilePath: profileURL.path,
-            sourceHomePath: sourceURL?.path,
-            clonePreset: preset,
-            isTemporary: temporary
-        )
+            let home = CodexHome(
+                name: name,
+                slug: slug,
+                kind: kind,
+                homePath: homeURL.path,
+                profilePath: profileURL.path,
+                sourceHomePath: sourceURL?.path,
+                clonePreset: preset,
+                cloneMaterialization: sourceURL == nil ? nil : policies.materialization,
+                clonePolicies: sourceURL == nil ? nil : policies,
+                isTemporary: temporary
+            )
 
-        var state = try store.load()
-        state.homes.append(home)
-        try store.save(state)
-        return home
+            var state = try store.load()
+            state.homes.append(home)
+            try store.save(state)
+            return home
+        } catch {
+            try? fileManager.removeItem(at: homeURL)
+            try? fileManager.removeItem(at: profileURL)
+            throw error
+        }
     }
 
     private func resolveHome(selector: String, in state: HomeportState) throws -> CodexHome {
@@ -286,6 +371,17 @@ public final class HomeportService: @unchecked Sendable {
             return home
         }
         throw HomeportError.homeDoesNotExist(selector)
+    }
+
+    private func cloneSourceURL(selector: String) throws -> URL {
+        if selector == "main" {
+            return paths.mainCodexHome
+        }
+        let state = try store.load()
+        guard let home = state.homes.first(where: { $0.slug == selector || $0.name == selector }) else {
+            throw HomeportError.homeDoesNotExist(selector)
+        }
+        return URL(fileURLWithPath: home.homePath, isDirectory: true)
     }
 
     private func reconcileInstances(in state: inout HomeportState) {

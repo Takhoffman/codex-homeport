@@ -49,7 +49,8 @@ struct MenuBarBadgeIcon: View {
 @MainActor
 final class HomeportModel: ObservableObject {
     @Published var state = HomeportState()
-    @Published var report = DiagnosticReport(globalCodexHome: nil, mainSessionCount: 0, suspiciousLaunchers: [], codexBinaryPath: nil, codexAppExists: false, notes: [])
+    @Published var report = DiagnosticReport(globalCodexHome: nil, mainSessionCount: 0, suspiciousLaunchers: [], codexBinaryPath: nil, codexAppExists: false, authStatus: CodexAuthStatus(), notes: [])
+    @Published var authStatuses: [UUID: CodexAuthStatus] = [:]
     @Published var status = "Ready"
     @Published var workspacePath = FileManager.default.currentDirectoryPath
     @Published var isCheckingForUpdates = false
@@ -88,8 +89,20 @@ final class HomeportModel: ObservableObject {
 
     func refresh(statusMessage: String? = nil) {
         do {
-            state = try service.loadState()
+            var loadedState = try service.loadState()
+            if !isValidCloneSourceSelector(loadedState.preferences.cloneSourceSelector, in: loadedState) {
+                loadedState.preferences.cloneSourceSelector = "main"
+                try service.saveState(loadedState)
+            }
+            state = loadedState
             report = service.report()
+            var nextAuthStatuses = Dictionary(uniqueKeysWithValues: state.homes.map { home in
+                (home.id, service.authStatus(for: home))
+            })
+            if let mainHome = state.homes.first(where: { $0.kind == .main }) {
+                nextAuthStatuses[mainHome.id] = report.authStatus
+            }
+            authStatuses = nextAuthStatuses
             workspacePath = state.lastWorkspacePath ?? workspacePath
             status = statusMessage ?? "Ready"
         } catch {
@@ -97,11 +110,36 @@ final class HomeportModel: ObservableObject {
         }
     }
 
+    private func isValidCloneSourceSelector(_ selector: String, in state: HomeportState) -> Bool {
+        selector == "main" || state.homes.contains { $0.kind != .main && ($0.slug == selector || $0.name == selector) }
+    }
+
+    func authStatus(for home: CodexHome) -> CodexAuthStatus {
+        authStatuses[home.id] ?? CodexAuthStatus()
+    }
+
+    func authSummary(for home: CodexHome) -> String {
+        let status = authStatus(for: home)
+        if status.isLoggedIn {
+            return [status.modeDisplay, status.accountLabel, status.usageSummary]
+                .compactMap { $0 }
+                .joined(separator: " • ")
+        }
+        if status.hasStoredCredentials {
+            return [status.modeDisplay, status.accountLabel, "Stored credentials found"]
+                .compactMap { $0 }
+                .joined(separator: " • ")
+        }
+        return status.detail ?? "No stored auth in this home"
+    }
+
     func launch(_ selector: String, target: LaunchTarget) {
         do {
             let actualSelector = modelSelector(for: selector)
+            let missingLinks = try service.brokenLinkedTargets(selector: actualSelector)
             let instance = try service.launch(selector: actualSelector, target: target, workspace: workspacePath)
-            refresh(statusMessage: "Opened \(instance.homeName) in \(target.rawValue)")
+            let warning = missingLinks.isEmpty ? "" : "; linked paths missing: \(missingLinks.joined(separator: ", "))"
+            refresh(statusMessage: "Opened \(instance.homeName) in \(target.rawValue)\(warning)")
         } catch {
             status = error.localizedDescription
         }
@@ -129,9 +167,10 @@ final class HomeportModel: ObservableObject {
             _ = try service.clone(
                 name: "Working Setup \(formatter.string(from: Date()))",
                 preset: state.preferences.defaultClonePreset,
-                options: state.preferences.cloneOptions
+                policies: state.preferences.clonePolicies,
+                sourceSelector: state.preferences.cloneSourceSelector
             )
-            refresh(statusMessage: "Created copied home")
+            refresh(statusMessage: "Created home: \(state.preferences.clonePolicies.summary)")
         } catch {
             status = error.localizedDescription
         }
@@ -144,7 +183,8 @@ final class HomeportModel: ObservableObject {
             _ = try service.clone(
                 name: "Config Copy \(formatter.string(from: Date()))",
                 preset: .configOnly,
-                options: .configOnly
+                policies: .configOnly,
+                sourceSelector: state.preferences.cloneSourceSelector
             )
             refresh(statusMessage: "Created config-only home")
         } catch {
@@ -242,8 +282,12 @@ final class HomeportModel: ObservableObject {
     func setDefaultClonePreset(_ preset: ClonePreset) {
         do {
             var next = try service.loadState()
+            let policies = ClonePolicies.preset(preset)
+            rememberCurrentClonePolicies(in: &next, beforeSetting: policies)
             next.preferences.defaultClonePreset = preset
             next.preferences.cloneOptions = .preset(preset)
+            next.preferences.cloneMaterialization = .copy
+            next.preferences.clonePolicies = policies
             try service.saveState(next)
             refresh(statusMessage: "Saved copy preset")
         } catch {
@@ -385,8 +429,65 @@ final class HomeportModel: ObservableObject {
             var next = try service.loadState()
             transform(&next.preferences.cloneOptions)
             next.preferences.defaultClonePreset = clonePreset(for: next.preferences.cloneOptions)
+            next.preferences.clonePolicies = ClonePolicies(
+                options: next.preferences.cloneOptions,
+                materialization: next.preferences.cloneMaterialization
+            )
             try service.saveState(next)
             refresh(statusMessage: "Saved copy options")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func setCloneSourceSelector(_ selector: String) {
+        do {
+            var next = try service.loadState()
+            next.preferences.cloneSourceSelector = selector
+            try service.saveState(next)
+            refresh(statusMessage: "Saved clone source")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func setCloneMaterialization(_ materialization: CloneMaterialization) {
+        do {
+            var next = try service.loadState()
+            next.preferences.cloneMaterialization = materialization
+            next.preferences.clonePolicies = ClonePolicies(options: next.preferences.cloneOptions, materialization: materialization)
+            try service.saveState(next)
+            refresh(statusMessage: "Saved clone mode")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func updateClonePolicies(_ transform: (inout ClonePolicies) -> Void) {
+        do {
+            var next = try service.loadState()
+            transform(&next.preferences.clonePolicies)
+            next.preferences.cloneOptions = next.preferences.clonePolicies.options
+            next.preferences.cloneMaterialization = next.preferences.clonePolicies.materialization
+            next.preferences.defaultClonePreset = clonePreset(for: next.preferences.cloneOptions)
+            next.preferences.lastClonePolicies = next.preferences.clonePolicies
+            try service.saveState(next)
+            refresh(statusMessage: "Saved clone policies")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func applyClonePolicies(_ policies: ClonePolicies, statusMessage: String = "Saved clone preset") {
+        do {
+            var next = try service.loadState()
+            rememberCurrentClonePolicies(in: &next, beforeSetting: policies)
+            next.preferences.clonePolicies = policies
+            next.preferences.cloneOptions = policies.options
+            next.preferences.cloneMaterialization = policies.materialization
+            next.preferences.defaultClonePreset = clonePreset(for: policies.options)
+            try service.saveState(next)
+            refresh(statusMessage: statusMessage)
         } catch {
             status = error.localizedDescription
         }
@@ -416,6 +517,13 @@ final class HomeportModel: ObservableObject {
             return .configOnly
         }
         return .workingSetup
+    }
+
+    private func rememberCurrentClonePolicies(in state: inout HomeportState, beforeSetting policies: ClonePolicies) {
+        guard state.preferences.clonePolicies != policies else {
+            return
+        }
+        state.preferences.lastClonePolicies = state.preferences.clonePolicies
     }
 }
 
@@ -556,7 +664,10 @@ struct HomeportMenuView: View {
                             isEditing: isEditingDetail,
                             editedName: $editedName,
                             launch: { target in model.launch(focusedHome.slug, target: target) },
-                            setPinned: { pinned in model.setHomePinned(focusedHome, pinned: pinned) },
+                            setPinned: { pinned in
+                                model.setHomePinned(focusedHome, pinned: pinned)
+                                self.focusedHome = model.state.homes.first { $0.id == focusedHome.id } ?? focusedHome
+                            },
                             delete: {
                                 model.deleteHome(focusedHome)
                                 self.focusedHome = nil
@@ -831,28 +942,40 @@ struct FavoritesTab: View {
     var openConsole: () -> Void
 
     var favoriteHomes: [CodexHome] {
-        if model.pinnedHomes.isEmpty {
-            return Array(model.state.homes.prefix(1))
+        model.pinnedHomes
+    }
+
+    var fallbackMainHome: CodexHome? {
+        guard favoriteHomes.isEmpty else {
+            return nil
         }
-        return model.pinnedHomes
+        return model.state.homes.first { $0.kind == .main }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             DefaultLaunchCard()
             SectionLabel("Favorites")
-            if favoriteHomes.isEmpty {
-                EmptyState(title: "No homes yet", subtitle: "Create or pin homes to put them here.")
-            } else {
+            if !favoriteHomes.isEmpty {
                 ForEach(favoriteHomes) { home in
                     HomeListRow(
                         home: home,
-                        subtitle: model.isPinned(home) ? "Favorite • \(kindLabel(for: home))" : "Main home • not pinned yet",
+                        subtitle: "Favorite • \(kindLabel(for: home))",
                         isEditing: isEditing,
                         openDetail: { openDetail(home) },
                         launch: { target in model.launch(home.slug, target: target) }
                     )
                 }
+            } else if let fallbackMainHome {
+                HomeListRow(
+                    home: fallbackMainHome,
+                    subtitle: "Default main home • not a favorite yet",
+                    isEditing: isEditing,
+                    openDetail: { openDetail(fallbackMainHome) },
+                    launch: { target in model.launch(fallbackMainHome.slug, target: target) }
+                )
+            } else {
+                EmptyState(title: "No favorites yet", subtitle: "Create or pin homes to put them here.")
             }
             if let recent = model.recentInstances.first {
                 SectionLabel("Recent")
@@ -862,6 +985,22 @@ struct FavoritesTab: View {
             Button("Open Console", action: openConsole)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+        }
+    }
+}
+
+private extension CodexAuthStatus {
+    var modeDisplay: String? {
+        guard let mode, !mode.isEmpty else {
+            return nil
+        }
+        switch mode {
+        case "chatgpt":
+            return "ChatGPT"
+        case "api-key":
+            return "API key"
+        default:
+            return mode
         }
     }
 }
@@ -1027,7 +1166,7 @@ struct NewHomeTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionLabel("Create")
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            VStack(spacing: 0) {
                 ForEach(NewHomeMode.allCases) { candidate in
                     NewHomeModeButton(mode: candidate, isSelected: mode == candidate) {
                         mode = candidate
@@ -1035,8 +1174,14 @@ struct NewHomeTab: View {
                             model.setDefaultClonePreset(.configOnly)
                         }
                     }
+                    if candidate != NewHomeMode.allCases.last {
+                        Divider()
+                            .padding(.leading, 40)
+                    }
                 }
             }
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.13)))
             SectionLabel("Opens In")
             Picker("Opens In", selection: $launchTarget) {
                 Text("Desktop App").tag(LaunchTarget.desktop)
@@ -1044,14 +1189,16 @@ struct NewHomeTab: View {
             }
             .pickerStyle(.segmented)
             if mode.showsCloneOptions {
-                SectionLabel("Clone Includes")
-                CloneIncludeToggles()
+                SectionLabel("Clone Source")
+                CloneSourceControls()
+                SectionLabel("Clone Policies")
+                ClonePolicyTable()
             }
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(mode.title)
                         .font(.caption.weight(.semibold))
-                    Text(mode.showsCloneOptions ? "Copy options apply to this saved home." : "No copy options needed.")
+                    Text(mode.showsCloneOptions ? model.state.preferences.clonePolicies.summary : "No copy options needed.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -1062,6 +1209,26 @@ struct NewHomeTab: View {
             .padding(12)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
         }
+    }
+}
+
+struct CloneSourceControls: View {
+    @EnvironmentObject var model: HomeportModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Source", selection: Binding(
+                get: { model.state.preferences.cloneSourceSelector },
+                set: { model.setCloneSourceSelector($0) }
+            )) {
+                Text("Main").tag("main")
+                ForEach(model.state.homes.filter { $0.kind != .main }) { home in
+                    Text(home.name).tag(home.slug)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
@@ -1219,50 +1386,40 @@ struct FocusedHomeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(spacing: 10) {
-                Image(systemName: icon(for: home))
-                    .font(.largeTitle)
-                    .frame(width: 64, height: 64)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 18))
-                Text(home.name)
-                    .font(.title2.weight(.bold))
-                Text("\(kindLabel(for: home)) • \(model.isPinned(home) ? "Favorite" : "Not favorite")")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                LaunchActionPair(launch: launch)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(14)
-            .background(.background, in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(.quaternary))
+            HomeDetailHero(
+                home: home,
+                isPinned: model.isPinned(home),
+                authSummary: model.authSummary(for: home),
+                icon: icon(for: home),
+                launch: launch
+            )
 
             SectionLabel("Home")
-            InfoCard(title: "Path", subtitle: home.homePath)
-            InfoCard(title: "Copy Source", subtitle: home.sourceHomePath ?? (home.kind == .main ? "This is your main Codex home" : "No inherited files"))
-
-            SectionLabel("Manage")
-            VStack(alignment: .leading, spacing: 8) {
-                Toggle("Favorite", isOn: Binding(
-                    get: { model.isPinned(home) },
-                    set: { setPinned($0) }
-                ))
-                if isEditing && home.kind != .main {
-                    HStack {
-                        TextField("Name", text: $editedName)
-                            .textFieldStyle(.roundedBorder)
-                        Button("Save", action: saveName)
-                            .disabled(editedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || editedName == home.name)
-                    }
-                    Button("Review Delete", role: .destructive, action: delete)
-                        .buttonStyle(.bordered)
-                } else if home.kind == .main {
-                    Text("The main home cannot be deleted.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+            VStack(spacing: 6) {
+                DetailInfoRow(symbol: "folder", title: "Path", subtitle: home.homePath)
+                DetailInfoRow(symbol: "key.fill", title: "Auth", subtitle: model.authSummary(for: home))
+                DetailInfoRow(symbol: "arrow.triangle.branch", title: "Clone Source", subtitle: home.sourceHomePath ?? (home.kind == .main ? "This is your main Codex home" : "No inherited files"))
+                if let policies = home.clonePolicies {
+                    DetailInfoRow(symbol: "slider.horizontal.3", title: "Clone Policies", subtitle: policies.summary)
+                } else if let materialization = home.cloneMaterialization {
+                    DetailInfoRow(symbol: "doc.on.doc", title: "Clone Mode", subtitle: materialization.displayName)
+                }
+                let missingLinks = model.service.brokenLinkedTargets(for: home)
+                if !missingLinks.isEmpty {
+                    DetailInfoRow(symbol: "link.badge.plus", title: "Linked Paths Missing", subtitle: missingLinks.joined(separator: ", "), tint: .orange)
                 }
             }
-            .padding(12)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+
+            SectionLabel("Manage")
+            HomeManagePanel(
+                home: home,
+                isEditing: isEditing,
+                isPinned: model.isPinned(home),
+                editedName: $editedName,
+                setPinned: setPinned,
+                delete: delete,
+                saveName: saveName
+            )
         }
     }
 
@@ -1273,6 +1430,148 @@ struct FocusedHomeView: View {
         case .cleanRoom: "sparkles"
         case .temporary: "timer"
         }
+    }
+}
+
+struct HomeDetailHero: View {
+    var home: CodexHome
+    var isPinned: Bool
+    var authSummary: String
+    var icon: String
+    var launch: (LaunchTarget) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: icon)
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.blue)
+                    .frame(width: 48, height: 48)
+                    .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(home.name)
+                            .font(.title3.weight(.bold))
+                            .lineLimit(1)
+                        if isPinned {
+                            Image(systemName: "star.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.yellow)
+                        }
+                    }
+                    Text("\(kindLabel(for: home)) • \(isPinned ? "Favorite" : "Not favorite")")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        HomeTags(home: home)
+                        HomeAuthTag(home: home)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+
+            Text(authSummary)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+
+            HStack {
+                LaunchActionPair(launch: launch)
+                Spacer()
+                Text(home.slug)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            }
+        }
+        .padding(12)
+        .background(Color.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.blue.opacity(0.18)))
+    }
+}
+
+struct DetailInfoRow: View {
+    var symbol: String
+    var title: String
+    var subtitle: String
+    var tint: Color = .secondary
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(width: 22, height: 22)
+                .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+struct HomeManagePanel: View {
+    var home: CodexHome
+    var isEditing: Bool
+    var isPinned: Bool
+    @Binding var editedName: String
+    var setPinned: (Bool) -> Void
+    var delete: () -> Void
+    var saveName: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: Binding(
+                get: { isPinned },
+                set: { setPinned($0) }
+            )) {
+                HStack(spacing: 10) {
+                    Image(systemName: isPinned ? "star.fill" : "star")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(isPinned ? .yellow : .secondary)
+                        .frame(width: 24, height: 24)
+                        .background((isPinned ? Color.yellow : Color.secondary).opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Favorite")
+                            .font(.caption.weight(.semibold))
+                        Text(isPinned ? "Shown in the Favorites list" : "Pin this home for faster launch")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .toggleStyle(.switch)
+
+            if isEditing && home.kind != .main {
+                HStack {
+                    TextField("Name", text: $editedName)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Save", action: saveName)
+                        .disabled(editedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || editedName == home.name)
+                }
+                Button("Review Delete", role: .destructive, action: delete)
+                    .buttonStyle(.bordered)
+            } else {
+                Text(home.kind == .main ? "The main home cannot be renamed or deleted." : "Use Edit to rename or review deletion.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -1296,9 +1595,13 @@ struct HomeListRow: View {
                         .frame(width: 24, height: 24)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(home.name)
-                            .font(.caption.weight(.semibold))
-                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            Text(home.name)
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                            HomeTags(home: home)
+                            HomeAuthTag(home: home)
+                        }
                         Text(subtitle)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -1324,6 +1627,73 @@ struct HomeListRow: View {
         case .cleanRoom: "sparkles"
         case .temporary: "timer"
         }
+    }
+}
+
+struct HomeTags: View {
+    var home: CodexHome
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(tags, id: \.label) { tag in
+                Label(tag.label, systemImage: tag.symbol)
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(tag.color)
+                    .lineLimit(1)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(tag.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+            }
+        }
+    }
+
+    private var tags: [(label: String, symbol: String, color: Color)] {
+        if let policies = home.clonePolicies {
+            var tags: [(label: String, symbol: String, color: Color)] = []
+            if policies.linkedCategoryCount > 0 {
+                tags.append(("\(policies.linkedCategoryCount) linked", "link", policies.auth == .link ? .orange : .blue))
+            }
+            if policies.copiedCategoryCount > 0 && policies.linkedCategoryCount > 0 {
+                tags.append(("\(policies.copiedCategoryCount) copied", "doc.on.doc", .secondary))
+            }
+            return tags
+        }
+        switch home.cloneMaterialization {
+        case .linkSafeCustomizations:
+            return [("Linked", "link", .blue)]
+        case .linkSafeCustomizationsAndAuth:
+            return [("Auth linked", "key.fill", .orange)]
+        case .copy, nil:
+            return []
+        }
+    }
+}
+
+struct HomeAuthTag: View {
+    @EnvironmentObject var model: HomeportModel
+    var home: CodexHome
+
+    var body: some View {
+        Label(display.label, systemImage: display.symbol)
+            .labelStyle(.titleAndIcon)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(display.color)
+            .lineLimit(1)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(display.color.opacity(display.backgroundOpacity), in: RoundedRectangle(cornerRadius: 5))
+    }
+
+    private var display: (label: String, symbol: String, color: Color, backgroundOpacity: Double) {
+        let status = model.authStatus(for: home)
+        if status.isLoggedIn {
+            return (status.accountLabel ?? "Logged in", "checkmark.seal.fill", .blue, 0.12)
+        }
+        if status.hasStoredCredentials {
+            return (status.accountLabel ?? "Stored auth", "key.fill", .secondary, 0.10)
+        }
+        return ("No auth", "key.slash", .secondary, 0.06)
     }
 }
 
@@ -1400,12 +1770,18 @@ struct LaunchActionPair: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Button("App") {
+            Button {
                 launch(.desktop)
+            } label: {
+                Label("App", systemImage: "macwindow")
+                    .labelStyle(.titleAndIcon)
             }
             .help("Open in Codex app")
-            Button("Term") {
+            Button {
                 launch(.terminal)
+            } label: {
+                Label("Term", systemImage: "terminal")
+                    .labelStyle(.titleAndIcon)
             }
             .help("Open in Terminal")
         }
@@ -1421,105 +1797,185 @@ struct NewHomeModeButton: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
-                Label(mode.title, systemImage: mode.symbol)
+            HStack(spacing: 10) {
+                Image(systemName: mode.symbol)
                     .font(.caption.weight(.semibold))
-                    .lineLimit(2)
-                Text(mode.subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
+                    .foregroundStyle(isSelected ? .blue : .secondary)
+                    .frame(width: 20, height: 20)
+                    .background(isSelected ? Color.blue.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mode.title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Text(mode.subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.blue)
+                }
             }
-            .frame(maxWidth: .infinity, minHeight: 82, alignment: .topLeading)
-            .padding(10)
-            .background(isSelected ? Color.blue.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(isSelected ? Color.blue.opacity(0.35) : Color.secondary.opacity(0.15)))
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(isSelected ? Color.blue.opacity(0.08) : Color.clear)
         }
         .buttonStyle(.plain)
     }
 }
 
-struct CloneIncludeToggles: View {
+struct ClonePolicyTable: View {
     @EnvironmentObject var model: HomeportModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                helperButton("Clone", .workingSetup)
-                helperButton("Config", .configOnly)
-                helperButton("Empty", .empty)
-            }
-            CopyGroup(title: "Safe Defaults") {
-                toggle("Config", \.config)
-                toggle("Skills", \.skills)
-                toggle("Plugins", \.plugins)
-                toggle("Prompts", \.prompts)
-                toggle("Rules", \.rules)
-                toggle("Profiles", \.profiles)
-            }
-            CopyGroup(title: "Identity And Browser", warning: true) {
-                toggle("Auth", \.auth)
-                toggle("Browser", \.browserSupport)
-                toggle("Agents", \.agents)
-                toggle("Memories", \.memories)
-            }
-            CopyGroup(title: "History", warning: true) {
-                toggle("Sessions and logs", \.sessionsAndLogs)
-            }
-        }
-    }
-
-    private func helperButton(_ label: String, _ options: CloneOptions) -> some View {
-        Button(label) {
-            model.updateCloneOptions { current in
-                current = options
-            }
-        }
-        .font(.caption)
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-    }
-
-    private func toggle(
-        _ label: String,
-        _ keyPath: WritableKeyPath<CloneOptions, Bool>
-    ) -> some View {
-        Toggle(label, isOn: Binding(
-            get: { model.state.preferences.cloneOptions[keyPath: keyPath] },
-            set: { value in
-                model.updateCloneOptions { options in
-                    options[keyPath: keyPath] = value
-                    if !value {
-                        options.everything = false
+            ClonePolicyPresetGrid()
+            ForEach(CloneCategoryGroup.allCases, id: \.rawValue) { group in
+                PolicyGroup(title: group.displayName, warningText: group.warningText) {
+                    ForEach(categories(in: group)) { category in
+                        policyRow(category)
                     }
                 }
             }
-        ))
-        .font(.caption)
+        }
+    }
+
+    private func categories(in group: CloneCategoryGroup) -> [CloneCategory] {
+        CloneCategory.allCases.filter { $0.group == group }
+    }
+
+    private func policyRow(_ category: CloneCategory) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(category.displayName)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Text(category.pathSummary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 8)
+            HStack(spacing: 0) {
+                policyButton(.skip, category)
+                policyButton(.copy, category)
+                policyButton(.link, category)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.18)))
+        }
+        .frame(maxWidth: .infinity, minHeight: 38)
+    }
+
+    private func policyButton(
+        _ policy: ClonePolicy,
+        _ category: CloneCategory
+    ) -> some View {
+        let selected = model.state.preferences.clonePolicies[category] == policy
+        let disabled = policy == .link && !category.canLink
+        return Button(policy.displayName) {
+            model.updateClonePolicies { policies in
+                policies[category] = policy
+            }
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(disabled ? Color.secondary.opacity(0.5) : (selected ? Color.white : Color.primary))
+        .frame(width: 42, height: 24)
+        .background(selected ? Color.blue : Color.clear)
+        .disabled(disabled)
+        .help(disabled ? "Link is not available for this category" : policy.displayName)
     }
 }
 
-struct CopyGroup<Content: View>: View {
+struct ClonePolicyPresetGrid: View {
+    @EnvironmentObject var model: HomeportModel
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 78), spacing: 6)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+            if let last = model.state.preferences.lastClonePolicies {
+                presetButton("Last", symbol: "clock.arrow.circlepath", policies: last)
+            } else {
+                disabledPresetButton("Last", symbol: "clock.arrow.circlepath")
+            }
+            presetButton("Working", symbol: "doc.on.doc", policies: .workingSetup)
+            presetButton("Config", symbol: "gearshape", policies: .configOnly)
+            presetButton(
+                "Link Safe",
+                symbol: "link",
+                policies: ClonePolicies(options: .workingSetup, materialization: .linkSafeCustomizations)
+            )
+            presetButton(
+                "Link Auth",
+                symbol: "key",
+                policies: ClonePolicies(options: .workingSetup, materialization: .linkSafeCustomizationsAndAuth)
+            )
+            presetButton("Everything", symbol: "archivebox", policies: .full)
+            presetButton("Empty", symbol: "nosign", policies: .empty)
+        }
+    }
+
+    private func presetButton(_ label: String, symbol: String, policies: ClonePolicies) -> some View {
+        let selected = model.state.preferences.clonePolicies == policies
+        return Button {
+            model.applyClonePolicies(policies, statusMessage: "Saved \(label) preset")
+        } label: {
+            Label(label, systemImage: symbol)
+                .labelStyle(.titleAndIcon)
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: 24)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .tint(selected ? .blue : nil)
+    }
+
+    private func disabledPresetButton(_ label: String, symbol: String) -> some View {
+        Label(label, systemImage: symbol)
+            .labelStyle(.titleAndIcon)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, minHeight: 24)
+            .padding(.horizontal, 7)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            .opacity(0.6)
+            .help("No previous custom policy yet")
+    }
+}
+
+struct PolicyGroup<Content: View>: View {
     var title: String
-    var warning = false
+    var warningText: String?
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
             Text(title.uppercased())
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(.secondary)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 4) {
+            VStack(spacing: 4) {
                 content
             }
-            if warning {
-                Text("These may carry account identity, remembered context, or history.")
+            if let warningText {
+                Text(warningText)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .lineLimit(3)
             }
         }
         .padding(10)
-        .background(warning ? Color.orange.opacity(0.12) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .background(warningText == nil ? Color.secondary.opacity(0.08) : Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
@@ -1672,7 +2128,7 @@ struct ConsoleCopySettings: View {
                 }
             }
             .frame(maxWidth: 360)
-            CloneIncludeToggles()
+            ClonePolicyTable()
         }
         .padding(14)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
@@ -1919,6 +2375,22 @@ struct DiagnosticsPanel: View {
                     Text("codex CLI").foregroundStyle(.secondary)
                     Text(model.report.codexBinaryPath ?? "missing")
                 }
+                GridRow {
+                    Text("Main auth").foregroundStyle(.secondary)
+                    Text(model.report.authStatus.statusDisplay)
+                }
+                GridRow {
+                    Text("Auth mode").foregroundStyle(.secondary)
+                    Text(model.report.authStatus.modeDisplay ?? "unknown")
+                }
+                GridRow {
+                    Text("Account").foregroundStyle(.secondary)
+                    Text(model.report.authStatus.accountLabel ?? "unknown")
+                }
+                GridRow {
+                    Text("Usage").foregroundStyle(.secondary)
+                    Text(model.report.authStatus.usageSummary ?? "unknown")
+                }
             }
             if !model.report.suspiciousLaunchers.isEmpty {
                 Text("Suspicious launchers")
@@ -1933,5 +2405,17 @@ struct DiagnosticsPanel: View {
         .padding(14)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+    }
+}
+
+private extension CodexAuthStatus {
+    var statusDisplay: String {
+        if isLoggedIn {
+            return "logged in"
+        }
+        if hasStoredCredentials {
+            return "stored"
+        }
+        return "not found"
     }
 }

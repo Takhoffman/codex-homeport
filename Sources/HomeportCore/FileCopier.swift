@@ -1,5 +1,10 @@
 import Foundation
 
+private struct CloneItem {
+    var name: String
+    var policy: ClonePolicy
+}
+
 public struct FileCopier {
     private let fileManager: FileManager
 
@@ -12,13 +17,36 @@ public struct FileCopier {
         source: URL?,
         preset: ClonePreset
     ) throws {
-        try createHome(destination: destination, source: source, options: .preset(preset))
+        try createHome(destination: destination, source: source, options: .preset(preset), materialization: .copy)
     }
 
     public func createHome(
         destination: URL,
         source: URL?,
-        options: CloneOptions
+        options: CloneOptions,
+        materialization: CloneMaterialization = .copy
+    ) throws {
+        try createHome(
+            destination: destination,
+            source: source,
+            policies: ClonePolicies(options: options, materialization: materialization),
+            copyEverything: options.everything && materialization == .copy
+        )
+    }
+
+    public func createHome(
+        destination: URL,
+        source: URL?,
+        policies: ClonePolicies
+    ) throws {
+        try createHome(destination: destination, source: source, policies: policies, copyEverything: false)
+    }
+
+    private func createHome(
+        destination: URL,
+        source: URL?,
+        policies: ClonePolicies,
+        copyEverything: Bool
     ) throws {
         if fileManager.fileExists(atPath: destination.path) {
             throw HomeportError.homeAlreadyExists(destination.path)
@@ -26,16 +54,27 @@ public struct FileCopier {
 
         try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
 
-        guard let source, options != .empty else {
-            return
-        }
+        do {
+            guard let source, policies != .empty else {
+                return
+            }
 
-        if options.everything {
-            try copyEverything(from: source, to: destination)
-            return
-        }
+            let items = items(for: policies)
+            if copyEverything {
+                try materializeEverything(from: source, to: destination)
+                return
+            }
 
-        try copyExisting(names: names(for: options), from: source, to: destination)
+            if policies.options.everything {
+                try materializeEverything(items: items, from: source, to: destination)
+                return
+            }
+
+            try materializeExisting(items: items, from: source, to: destination)
+        } catch {
+            try? fileManager.removeItem(at: destination)
+            throw error
+        }
     }
 
     public func cleanup(paths: [URL]) throws {
@@ -57,107 +96,38 @@ public struct FileCopier {
         return targets
     }
 
-    private var configOnlyNames: [String] {
-        [
-            "config.toml",
-            "AGENTS.md",
-            "agents",
-            "plugins",
-            "skills",
-            "skills-disabled",
-            "profiles",
-            "rules",
-            "prompts",
-            "mcp-auth"
-        ]
+    private func items(for policies: ClonePolicies) -> [CloneItem] {
+        var items: [CloneItem] = []
+        for category in CloneCategory.allCases {
+            append(category.paths, policy: policies[category], canLink: category.canLink, to: &items)
+        }
+        return Dictionary(grouping: items, by: \.name)
+            .map { name, grouped in
+                grouped.contains(where: { $0.policy == .link }) ? CloneItem(name: name, policy: .link) : CloneItem(name: name, policy: .copy)
+            }
+            .sorted { $0.name < $1.name }
     }
 
-    private var workingSetupNames: [String] {
-        configOnlyNames + [
-            "auth.json",
-            "chrome-native-hosts.json",
-            "chrome-native-hosts-v2.json",
-            "keybindings.json",
-            "memories",
-            "memories_1.sqlite",
-            "memories_1.sqlite-shm",
-            "memories_1.sqlite-wal",
-            "version.json"
-        ]
+    private func append(_ names: [String], policy: ClonePolicy, canLink: Bool, to items: inout [CloneItem]) {
+        guard policy != .skip else {
+            return
+        }
+        let effectivePolicy: ClonePolicy = policy == .link && canLink ? .link : .copy
+        items.append(contentsOf: names.map { CloneItem(name: $0, policy: effectivePolicy) })
     }
 
-    private func names(for options: CloneOptions) -> [String] {
-        var names: [String] = []
-        if options.config {
-            names.append(contentsOf: ["config.toml", "AGENTS.md", "keybindings.json", "version.json"])
-        }
-        if options.auth {
-            names.append("auth.json")
-        }
-        if options.skills {
-            names.append(contentsOf: ["skills", "skills-disabled", "skill-backups"])
-        }
-        if options.plugins {
-            names.append(contentsOf: ["plugins", "vendor_imports"])
-        }
-        if options.agents {
-            names.append("agents")
-        }
-        if options.prompts {
-            names.append("prompts")
-        }
-        if options.rules {
-            names.append("rules")
-        }
-        if options.profiles {
-            names.append("profiles")
-        }
-        if options.memories {
-            names.append(contentsOf: ["memories", "memories_1.sqlite", "memories_1.sqlite-shm", "memories_1.sqlite-wal"])
-        }
-        if options.browserSupport {
-            names.append(contentsOf: [
-                "browser",
-                "chrome-cdp-profile",
-                "chrome-native-hosts.json",
-                "chrome-native-hosts-v2.json",
-                "computer-use",
-                "mcp-auth"
-            ])
-        }
-        if options.sessionsAndLogs {
-            names.append(contentsOf: [
-                "session_index.jsonl",
-                "sessions",
-                "archived_sessions",
-                "logs_2.sqlite",
-                "logs_2.sqlite-shm",
-                "logs_2.sqlite-wal",
-                "goals_1.sqlite",
-                "goals_1.sqlite-shm",
-                "goals_1.sqlite-wal",
-                "state_5.sqlite",
-                "state_5.sqlite-shm",
-                "state_5.sqlite-wal",
-                "shell_snapshots",
-                "attachments"
-            ])
-        }
-        return Array(Set(names)).sorted()
-    }
-
-    private func copyExisting(names: [String], from source: URL, to destination: URL) throws {
-        for name in names {
-            let sourceURL = source.appendingPathComponent(name)
+    private func materializeExisting(items: [CloneItem], from source: URL, to destination: URL) throws {
+        for item in items {
+            let sourceURL = source.appendingPathComponent(item.name)
             guard fileManager.fileExists(atPath: sourceURL.path) else {
                 continue
             }
-            let destinationURL = destination.appendingPathComponent(name)
-            try copyItem(from: sourceURL, to: destinationURL)
+            let destinationURL = destination.appendingPathComponent(item.name)
+            try materializeItem(from: sourceURL, to: destinationURL, policy: item.policy)
         }
     }
 
-    private func copyEverything(from source: URL, to destination: URL) throws {
+    private func materializeEverything(from source: URL, to destination: URL) throws {
         guard fileManager.fileExists(atPath: source.path) else {
             throw HomeportError.homeDoesNotExist(source.path)
         }
@@ -172,10 +142,55 @@ public struct FileCopier {
         }
     }
 
+    private func materializeEverything(items: [CloneItem], from source: URL, to destination: URL) throws {
+        guard fileManager.fileExists(atPath: source.path) else {
+            throw HomeportError.homeDoesNotExist(source.path)
+        }
+
+        let knownNames = Set(items.map(\.name))
+        try materializeExisting(items: items, from: source, to: destination)
+        let contents = try fileManager.contentsOfDirectory(
+            at: source,
+            includingPropertiesForKeys: nil,
+            options: [.skipsSubdirectoryDescendants]
+        )
+        for item in contents where !knownNames.contains(item.lastPathComponent) {
+            try copyItem(from: item, to: destination.appendingPathComponent(item.lastPathComponent))
+        }
+    }
+
+    private func materializeItem(from source: URL, to destination: URL, policy: ClonePolicy) throws {
+        if policy == .link {
+            try linkItem(from: source, to: destination)
+            return
+        }
+        try copyItem(from: source, to: destination)
+    }
+
+    private func linkItem(from source: URL, to destination: URL) throws {
+        if fileManager.fileExists(atPath: destination.path) {
+            try trash(destination)
+        }
+        try fileManager.createSymbolicLink(at: destination, withDestinationURL: resolvedOneHopSymlink(source))
+    }
+
     private func copyItem(from source: URL, to destination: URL) throws {
         if fileManager.fileExists(atPath: destination.path) {
             try trash(destination)
         }
         try fileManager.copyItem(at: source, to: destination)
+    }
+
+    private func resolvedOneHopSymlink(_ url: URL) throws -> URL {
+        guard let destination = try? fileManager.destinationOfSymbolicLink(atPath: url.path) else {
+            return url
+        }
+        if destination.hasPrefix("/") {
+            return URL(fileURLWithPath: destination)
+        }
+        return url
+            .deletingLastPathComponent()
+            .appendingPathComponent(destination)
+            .standardizedFileURL
     }
 }

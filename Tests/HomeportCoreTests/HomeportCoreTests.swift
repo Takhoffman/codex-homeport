@@ -76,6 +76,254 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("session_index.jsonl").path))
     }
 
+    func testLinkSafeCloneSymlinksSafeCategoriesOnly() throws {
+        let root = try makeTempRoot()
+        let source = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("skills"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("browser"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("memories"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+        try "model = \"gpt\"".write(to: source.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+        try "secret".write(to: source.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+        try "custom".write(to: source.appendingPathComponent("custom-state.json"), atomically: true, encoding: .utf8)
+        try "memory".write(to: source.appendingPathComponent("memories_1.sqlite"), atomically: true, encoding: .utf8)
+        try "history".write(to: source.appendingPathComponent("session_index.jsonl"), atomically: true, encoding: .utf8)
+
+        try FileCopier().createHome(destination: destination, source: source, options: .full, materialization: .linkSafeCustomizations)
+
+        XCTAssertTrue(isSymlink(destination.appendingPathComponent("skills")))
+        XCTAssertTrue(isSymlink(destination.appendingPathComponent("config.toml")))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("auth.json")))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("browser")))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("memories")))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("memories_1.sqlite")))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("sessions")))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("session_index.jsonl")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("custom-state.json").path))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("custom-state.json")))
+    }
+
+    func testLinkAuthCloneSymlinksAuthButNotBrowserMemoriesOrHistory() throws {
+        let root = try makeTempRoot()
+        let source = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("browser"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("memories"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+        try "model = \"gpt\"".write(to: source.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+        try "secret".write(to: source.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+        try "memory".write(to: source.appendingPathComponent("memories_1.sqlite"), atomically: true, encoding: .utf8)
+        try "history".write(to: source.appendingPathComponent("session_index.jsonl"), atomically: true, encoding: .utf8)
+
+        try FileCopier().createHome(destination: destination, source: source, options: .full, materialization: .linkSafeCustomizationsAndAuth)
+
+        XCTAssertTrue(isSymlink(destination.appendingPathComponent("config.toml")))
+        XCTAssertTrue(isSymlink(destination.appendingPathComponent("auth.json")))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("browser")))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("memories")))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("memories_1.sqlite")))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("sessions")))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("session_index.jsonl")))
+    }
+
+    func testClonePoliciesAllowMixedSkipCopyAndLink() throws {
+        let root = try makeTempRoot()
+        let source = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("skills"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("plugins"), withIntermediateDirectories: true)
+        try "model = \"gpt\"".write(to: source.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+        try "secret".write(to: source.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+
+        let policies = ClonePolicies(
+            config: .copy,
+            auth: .link,
+            skills: .link,
+            plugins: .skip,
+            agents: .skip,
+            prompts: .skip,
+            rules: .skip,
+            profiles: .skip,
+            memories: .skip,
+            browserSupport: .skip,
+            sessionsAndLogs: .skip
+        )
+        try FileCopier().createHome(destination: destination, source: source, policies: policies)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("config.toml").path))
+        XCTAssertFalse(isSymlink(destination.appendingPathComponent("config.toml")))
+        XCTAssertTrue(isSymlink(destination.appendingPathComponent("auth.json")))
+        XCTAssertTrue(isSymlink(destination.appendingPathComponent("skills")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("plugins").path))
+    }
+
+    func testCloneCategoryMetadataDrivesDisplayedAndCopiedPaths() throws {
+        for category in CloneCategory.allCases {
+            for path in category.paths {
+                XCTAssertTrue(category.pathSummary.contains(path), "\(category.rawValue) summary omitted \(path)")
+            }
+
+            let root = try makeTempRoot()
+            let source = root.appendingPathComponent("source")
+            let destination = root.appendingPathComponent("destination")
+            try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+            for path in category.paths {
+                try path.write(to: source.appendingPathComponent(path), atomically: true, encoding: .utf8)
+            }
+
+            var policies = ClonePolicies.empty
+            policies[category] = .copy
+            try FileCopier().createHome(destination: destination, source: source, policies: policies)
+
+            for path in category.paths {
+                XCTAssertTrue(
+                    FileManager.default.fileExists(atPath: destination.appendingPathComponent(path).path),
+                    "\(category.rawValue) did not copy \(path)"
+                )
+            }
+        }
+    }
+
+    func testFileCopierRemovesDestinationAfterMaterializationFailure() throws {
+        let root = try makeTempRoot()
+        let source = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        let unreadableConfig = source.appendingPathComponent("config.toml")
+        try "secret".write(to: source.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+        try "model = \"gpt\"".write(to: unreadableConfig, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadableConfig.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: unreadableConfig.path)
+        }
+
+        XCTAssertThrowsError(try FileCopier().createHome(destination: destination, source: source, options: .workingSetup))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    func testLinkSafeCloneResolvesSourceSymlinkOneHop() throws {
+        let root = try makeTempRoot()
+        let source = root.appendingPathComponent("source")
+        let realSkills = root.appendingPathComponent("real-skills")
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: realSkills, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: source.appendingPathComponent("skills"), withDestinationURL: realSkills)
+
+        let options = CloneOptions(
+            config: false,
+            auth: false,
+            skills: true,
+            plugins: false,
+            agents: false,
+            prompts: false,
+            rules: false,
+            profiles: false,
+            memories: false,
+            browserSupport: false,
+            sessionsAndLogs: false
+        )
+        try FileCopier().createHome(destination: destination, source: source, options: options, materialization: .linkSafeCustomizations)
+
+        let linkedTarget = try symlinkTarget(destination.appendingPathComponent("skills"))
+        XCTAssertEqual(linkedTarget.standardizedFileURL.path, realSkills.standardizedFileURL.path)
+    }
+
+    func testDeletingSymlinkedHomeDoesNotDeleteSourceContent() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let mainSkills = root.appendingPathComponent(".codex/skills", isDirectory: true)
+        try FileManager.default.createDirectory(at: mainSkills, withIntermediateDirectories: true)
+        try "skill".write(to: mainSkills.appendingPathComponent("skill.md"), atomically: true, encoding: .utf8)
+
+        let options = CloneOptions(
+            config: false,
+            auth: false,
+            skills: true,
+            plugins: false,
+            agents: false,
+            prompts: false,
+            rules: false,
+            profiles: false,
+            memories: false,
+            browserSupport: false,
+            sessionsAndLogs: false
+        )
+        let home = try service.clone(
+            name: "Linked Skills",
+            preset: .workingSetup,
+            options: options,
+            sourceSelector: "main",
+            materialization: .linkSafeCustomizations
+        )
+        XCTAssertTrue(isSymlink(URL(fileURLWithPath: home.homePath).appendingPathComponent("skills")))
+
+        _ = try service.deleteHome(id: home.id)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mainSkills.appendingPathComponent("skill.md").path))
+    }
+
+    func testManagedHomeCanBeCloneSource() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let mainConfig = root.appendingPathComponent(".codex/config.toml")
+        try FileManager.default.createDirectory(at: mainConfig.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "model = \"template\"".write(to: mainConfig, atomically: true, encoding: .utf8)
+
+        let template = try service.clone(name: "Template Home", preset: .configOnly, options: .configOnly)
+        let clone = try service.clone(
+            name: "From Template",
+            preset: .configOnly,
+            options: .configOnly,
+            sourceSelector: template.slug,
+            materialization: .linkSafeCustomizations
+        )
+
+        XCTAssertEqual(clone.sourceHomePath, template.homePath)
+        XCTAssertTrue(isSymlink(URL(fileURLWithPath: clone.homePath).appendingPathComponent("config.toml")))
+    }
+
+    func testClonePersistsExactPolicies() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let mainHome = root.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: mainHome.appendingPathComponent("skills"), withIntermediateDirectories: true)
+        try "secret".write(to: mainHome.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+
+        let policies = ClonePolicies(
+            config: .skip,
+            auth: .link,
+            skills: .copy,
+            plugins: .skip,
+            agents: .skip,
+            prompts: .skip,
+            rules: .skip,
+            profiles: .skip,
+            memories: .skip,
+            browserSupport: .skip,
+            sessionsAndLogs: .skip
+        )
+        let home = try service.clone(name: "Mixed Policy", preset: .workingSetup, policies: policies, sourceSelector: "main")
+        let saved = try XCTUnwrap(try service.loadState().homes.first { $0.id == home.id })
+
+        XCTAssertEqual(saved.clonePolicies, policies)
+        XCTAssertEqual(saved.clonePolicies?.summary, "Link auth • Copy skills")
+    }
+
+    func testInvalidCloneSourceThrows() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+
+        XCTAssertThrowsError(try service.clone(
+            name: "Missing Source",
+            preset: .configOnly,
+            options: .configOnly,
+            sourceSelector: "missing-source",
+            materialization: .linkSafeCustomizations
+        ))
+    }
+
     func testTerminalCommandUsesPerProcessCodexHome() {
         let home = CodexHome(
             name: "Temp",
@@ -96,6 +344,85 @@ final class HomeportCoreTests: XCTestCase {
 
         let diagnostics = Diagnostics(paths: HomeportPaths(homeDirectory: root))
         XCTAssertEqual(diagnostics.sessionCount(in: home), 2)
+    }
+
+    func testDiagnosticsReportsStoredChatGPTAuthMetadata() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let auth = """
+        {
+          "auth_mode": "chatgpt",
+          "tokens": {
+            "id_token": "header.eyJlbWFpbCI6InRha0BleGFtcGxlLmNvbSJ9.signature",
+            "access_token": "redacted",
+            "account_id": "12345678-1234-1234-1234-123456789abc"
+          }
+        }
+        """
+        try auth.write(to: home.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+
+        let status = Diagnostics(paths: HomeportPaths(homeDirectory: root)).authStatus(in: home, includeCLIStatus: false)
+
+        XCTAssertFalse(status.isLoggedIn)
+        XCTAssertTrue(status.hasStoredCredentials)
+        XCTAssertEqual(status.mode, "chatgpt")
+        XCTAssertEqual(status.accountLabel, "tak@example.com")
+        XCTAssertEqual(status.usageSummary, "Usage unavailable")
+    }
+
+    func testDiagnosticsReportsMissingAuth() throws {
+        let root = try makeTempRoot()
+
+        let report = Diagnostics(paths: HomeportPaths(homeDirectory: root)).report()
+
+        XCTAssertFalse(report.authStatus.isLoggedIn)
+        XCTAssertNil(report.authStatus.accountLabel)
+    }
+
+    func testDiagnosticsDoesNotTreatAccountIDAloneAsLoggedIn() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let auth = """
+        {
+          "auth_mode": "chatgpt",
+          "tokens": {
+            "account_id": "12345678-1234-1234-1234-123456789abc"
+          }
+        }
+        """
+        try auth.write(to: home.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+
+        let status = Diagnostics(paths: HomeportPaths(homeDirectory: root)).authStatus(in: home, includeCLIStatus: false)
+
+        XCTAssertFalse(status.isLoggedIn)
+        XCTAssertFalse(status.hasStoredCredentials)
+        XCTAssertEqual(status.accountLabel, "account 12345678")
+    }
+
+    func testDiagnosticsReportsAuthForSpecificHome() throws {
+        let root = try makeTempRoot()
+        let mainHome = root.appendingPathComponent(".codex")
+        let cloneHome = root.appendingPathComponent(".codex-homes/clone")
+        try FileManager.default.createDirectory(at: mainHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cloneHome, withIntermediateDirectories: true)
+        let auth = """
+        {
+          "auth_mode": "chatgpt",
+          "tokens": {
+            "id_token": "header.eyJlbWFpbCI6ImNsb25lQGV4YW1wbGUuY29tIn0.signature",
+            "refresh_token": "redacted"
+          }
+        }
+        """
+        try auth.write(to: cloneHome.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+        let diagnostics = Diagnostics(paths: HomeportPaths(homeDirectory: root))
+
+        XCTAssertFalse(diagnostics.authStatus(in: mainHome, includeCLIStatus: false).hasStoredCredentials)
+        XCTAssertFalse(diagnostics.authStatus(in: cloneHome, includeCLIStatus: false).isLoggedIn)
+        XCTAssertTrue(diagnostics.authStatus(in: cloneHome, includeCLIStatus: false).hasStoredCredentials)
+        XCTAssertEqual(diagnostics.authStatus(in: cloneHome, includeCLIStatus: false).accountLabel, "clone@example.com")
     }
 
     func testCannotDeleteMainHome() throws {
@@ -133,6 +460,29 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertTrue(try service.loadState().pinnedHomeIDs.isEmpty)
     }
 
+    func testMainHomeHasStableIDAcrossFreshLoads() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+
+        let first = try XCTUnwrap(try service.loadState().homes.first(where: { $0.kind == .main }))
+        let second = try XCTUnwrap(try service.loadState().homes.first(where: { $0.kind == .main }))
+
+        XCTAssertEqual(first.id, HomeportStore.mainHomeID)
+        XCTAssertEqual(second.id, first.id)
+    }
+
+    func testPinningMainHomeFromFreshStatePersists() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let main = try XCTUnwrap(try service.loadState().homes.first(where: { $0.kind == .main }))
+
+        try service.setHomePinned(id: main.id, pinned: true)
+        XCTAssertEqual(try service.loadState().pinnedHomeIDs, [main.id])
+
+        try service.setHomePinned(id: main.id, pinned: false)
+        XCTAssertTrue(try service.loadState().pinnedHomeIDs.isEmpty)
+    }
+
     func testPreferencesDecodeOlderStateWithUpdaterDefaults() throws {
         let data = """
         {
@@ -163,6 +513,31 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertTrue(preferences.autoUpdateChecksEnabled)
         XCTAssertFalse(preferences.autoInstallUpdates)
         XCTAssertEqual(preferences.updateCheckInterval, .daily)
+        XCTAssertEqual(preferences.cloneMaterialization, .copy)
+        XCTAssertEqual(preferences.cloneSourceSelector, "main")
+        XCTAssertEqual(preferences.clonePolicies, ClonePolicies(options: preferences.cloneOptions, materialization: .copy))
+        XCTAssertNil(preferences.lastClonePolicies)
+    }
+
+    func testCodexHomeDecodeOlderCloneMetadataBuildsPolicies() throws {
+        let data = """
+        {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "name": "Linked Legacy",
+          "slug": "linked-legacy",
+          "kind": "clone",
+          "homePath": "/tmp/home",
+          "profilePath": "/tmp/profile",
+          "sourceHomePath": "/tmp/source",
+          "clonePreset": "config-only",
+          "cloneMaterialization": "linkSafeCustomizations",
+          "isTemporary": false
+        }
+        """.data(using: .utf8)!
+
+        let home = try JSONDecoder().decode(CodexHome.self, from: data)
+
+        XCTAssertEqual(home.clonePolicies, ClonePolicies(options: .configOnly, materialization: .linkSafeCustomizations))
     }
 
     func testVersionComparisonHandlesSemverLikeStrings() {
@@ -221,5 +596,20 @@ final class HomeportCoreTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
         }
         return url
+    }
+
+    private func isSymlink(_ url: URL) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return false
+        }
+        return attributes[.type] as? FileAttributeType == .typeSymbolicLink
+    }
+
+    private func symlinkTarget(_ url: URL) throws -> URL {
+        let target = try FileManager.default.destinationOfSymbolicLink(atPath: url.path)
+        if target.hasPrefix("/") {
+            return URL(fileURLWithPath: target)
+        }
+        return url.deletingLastPathComponent().appendingPathComponent(target)
     }
 }

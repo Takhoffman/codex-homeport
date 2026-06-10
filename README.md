@@ -19,7 +19,7 @@ It can launch Codex as the desktop app or in a terminal session while setting `C
 
 - **Main**: opens your normal `~/.codex`.
 - **Clean Room**: creates an empty managed home.
-- **Clone My Setup**: copies selected files from `~/.codex`.
+- **Clone My Setup**: copies selected files from `~/.codex` or a managed home, with an optional safe symlink mode for shared customizations.
 - **Temporary**: creates a throwaway home and marks it for cleanup review.
 
 Temporary homes are not deleted immediately. Homeport shows what will be removed and lets you delete or promote the home.
@@ -36,6 +36,10 @@ swift run homeport create --kind clean-room --name "Blank Slate"
 swift run homeport rename blank-slate --name "Scratch Lab"
 swift run homeport delete scratch-lab
 swift run homeport clone --preset working-setup --name "Test Home"
+swift run homeport clone --name "Shared Skills" --source main --link-safe --include skills,plugins
+swift run homeport clone --name "Shared Auth" --source main --link-auth --include config,auth
+swift run homeport clone --name "Linked Config" --source main --include config,auth --link config
+swift run homeport clone --name "From Template" --source template-home --link-safe
 swift run homeport list
 swift run homeport review
 swift run homeport cleanup INSTANCE_UUID
@@ -45,6 +49,12 @@ swift run homeport onboard
 swift run homeport uninstall
 swift run homeport clone --name "Skills Lab" --include config,skills,plugins --exclude auth,sessions
 ```
+
+`homeport clone --source main|SLUG` chooses the clone source. `--link-safe`
+symlinks safe customization categories only: config, skills, plugins, agents,
+prompts, rules, and profiles. `--link-auth` also symlinks selected `auth.json`.
+`--link LIST` symlinks specific linkable categories. Browser support, memories,
+and sessions/logs are always copied or excluded.
 
 ## Menu Bar App
 

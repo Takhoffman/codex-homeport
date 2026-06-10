@@ -1,6 +1,8 @@
 import Foundation
 
 public final class HomeportStore: @unchecked Sendable {
+    public static let mainHomeID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+
     private let paths: HomeportPaths
     private let fileManager: FileManager
     private let encoder: JSONEncoder
@@ -37,6 +39,7 @@ public final class HomeportStore: @unchecked Sendable {
 
     public func mainHome() -> CodexHome {
         CodexHome(
+            id: Self.mainHomeID,
             name: "Main",
             slug: "main",
             kind: .main,

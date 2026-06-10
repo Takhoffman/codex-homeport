@@ -90,6 +90,10 @@ func doctor(_ arguments: ArraySlice<String>) throws {
     print("Main sessions: \(report.mainSessionCount)")
     print("Codex.app: \(report.codexAppExists ? "found" : "missing")")
     print("codex CLI: \(report.codexBinaryPath ?? "missing")")
+    print("Main auth: \(authStatusLabel(report.authStatus))")
+    print("Auth mode: \(report.authStatus.mode ?? "unknown")")
+    print("Account: \(report.authStatus.accountLabel ?? "unknown")")
+    print("Usage: \(report.authStatus.usageSummary ?? "unknown")")
     print("GUI CODEX_HOME: \(report.globalCodexHome ?? "not set")")
 
     if report.suspiciousLaunchers.isEmpty {
@@ -150,13 +154,32 @@ func throwaway(_ arguments: [String]) throws {
 func clone(_ arguments: [String]) throws {
     let state = try service.loadState()
     let preset = option(arguments, "--preset").flatMap(ClonePreset.init(rawValue:)) ?? state.preferences.defaultClonePreset
-    let cloneOptions = cloneOptions(from: arguments, base: state.preferences.cloneOptions)
-    let name = option(arguments, "--name") ?? arguments.first(where: { !$0.hasPrefix("--") }) ?? "Homeport Clone"
-    let home = try service.clone(name: name, preset: preset, options: cloneOptions)
+    let hasExplicitPreset = option(arguments, "--preset") != nil
+    let basePolicies = hasExplicitPreset ? ClonePolicies.preset(preset) : state.preferences.clonePolicies
+    let clonePolicies = clonePolicies(from: arguments, base: basePolicies)
+    let sourceSelector = option(arguments, "--source") ?? "main"
+    let name = option(arguments, "--name") ?? positionalName(in: arguments) ?? "Homeport Clone"
+    let home = try service.clone(
+        name: name,
+        preset: preset,
+        policies: clonePolicies,
+        sourceSelector: sourceSelector
+    )
+    printCreatedHome(home)
+}
+
+func printCreatedHome(_ home: CodexHome) {
     print("Created \(home.name)")
     print("slug=\(home.slug)")
     print("CODEX_HOME=\(home.homePath)")
     print("profile=\(home.profilePath ?? "none")")
+    if let source = home.sourceHomePath {
+        print("source=\(source)")
+        print("materialization=\(home.cloneMaterialization?.rawValue ?? CloneMaterialization.copy.rawValue)")
+        if let policies = home.clonePolicies {
+            print("policies=\(policies.summary)")
+        }
+    }
 }
 
 func createHome(_ arguments: [String]) throws {
@@ -170,14 +193,16 @@ func createHome(_ arguments: [String]) throws {
         home = try service.createTemporary(name: name)
     case "clone":
         let preset = option(arguments, "--preset").flatMap(ClonePreset.init(rawValue:)) ?? .workingSetup
-        home = try service.clone(name: name ?? "Homeport Clone", preset: preset, options: cloneOptions(from: arguments, base: .preset(preset)))
+        home = try service.clone(
+            name: name ?? "Homeport Clone",
+            preset: preset,
+            policies: clonePolicies(from: arguments, base: .preset(preset)),
+            sourceSelector: option(arguments, "--source") ?? "main"
+        )
     default:
         throw HomeportError.unsupportedCommand("create \(kind)")
     }
-    print("Created \(home.name)")
-    print("slug=\(home.slug)")
-    print("CODEX_HOME=\(home.homePath)")
-    print("profile=\(home.profilePath ?? "none")")
+    printCreatedHome(home)
 }
 
 func renameHome(_ arguments: [String]) throws {
@@ -218,6 +243,13 @@ func list() throws {
         print("  home: \(home.homePath)")
         if let profile = home.profilePath {
             print("  profile: \(profile)")
+        }
+        if let source = home.sourceHomePath {
+            print("  source: \(source)")
+            print("  materialization: \(home.cloneMaterialization?.rawValue ?? CloneMaterialization.copy.rawValue)")
+            if let policies = home.clonePolicies {
+                print("  policies: \(policies.summary)")
+            }
         }
     }
     if !state.instances.isEmpty {
@@ -473,6 +505,8 @@ func configure(_ arguments: [String]) throws {
         var state = try service.loadState()
         state.preferences.defaultClonePreset = preset
         state.preferences.cloneOptions = .preset(preset)
+        state.preferences.cloneMaterialization = .copy
+        state.preferences.clonePolicies = .preset(preset)
         try service.saveState(state)
         print("Default clone preset: \(preset.rawValue)")
     }
@@ -480,6 +514,7 @@ func configure(_ arguments: [String]) throws {
     if let include = option(arguments, "--clone-include") {
         var state = try service.loadState()
         state.preferences.cloneOptions = applyCloneList(include, to: state.preferences.cloneOptions, value: true)
+        state.preferences.clonePolicies = applyClonePolicyList(include, to: state.preferences.clonePolicies, policy: .copy)
         try service.saveState(state)
         print("Updated clone includes: \(include)")
     }
@@ -487,6 +522,7 @@ func configure(_ arguments: [String]) throws {
     if let exclude = option(arguments, "--clone-exclude") {
         var state = try service.loadState()
         state.preferences.cloneOptions = applyCloneList(exclude, to: state.preferences.cloneOptions, value: false)
+        state.preferences.clonePolicies = applyClonePolicyList(exclude, to: state.preferences.clonePolicies, policy: .skip)
         try service.saveState(state)
         print("Updated clone excludes: \(exclude)")
     }
@@ -750,6 +786,53 @@ func option(_ arguments: [String], _ name: String) -> String? {
     return arguments[index + 1]
 }
 
+func authStatusLabel(_ status: CodexAuthStatus) -> String {
+    if status.isLoggedIn {
+        return "logged in"
+    }
+    if status.hasStoredCredentials {
+        return "stored"
+    }
+    return "not found"
+}
+
+func cloneMaterialization(from arguments: [String]) -> CloneMaterialization {
+    if arguments.contains("--link-auth") {
+        return .linkSafeCustomizationsAndAuth
+    }
+    if arguments.contains("--link-safe") || arguments.contains("--link") {
+        return .linkSafeCustomizations
+    }
+    return .copy
+}
+
+func positionalName(in arguments: [String]) -> String? {
+    let optionsWithValues: Set<String> = [
+        "--preset",
+        "--include",
+        "--exclude",
+        "--link",
+        "--name",
+        "--source"
+    ]
+    var skipNext = false
+    for argument in arguments {
+        if skipNext {
+            skipNext = false
+            continue
+        }
+        if optionsWithValues.contains(argument) {
+            skipNext = true
+            continue
+        }
+        if argument.hasPrefix("--") {
+            continue
+        }
+        return argument
+    }
+    return nil
+}
+
 func boolValue(_ value: String) -> Bool {
     ["1", "true", "yes", "on", "enable", "enabled"].contains(value.lowercased())
 }
@@ -774,6 +857,83 @@ func cloneOptions(from arguments: [String], base: CloneOptions) -> CloneOptions 
         options = applyCloneList(exclude, to: options, value: false)
     }
     return options
+}
+
+func clonePolicies(from arguments: [String], base: ClonePolicies) -> ClonePolicies {
+    var policies = base
+    if let include = option(arguments, "--include") {
+        policies = applyClonePolicyList(include, to: policies, policy: .copy)
+    }
+    if let exclude = option(arguments, "--exclude") {
+        policies = applyClonePolicyList(exclude, to: policies, policy: .skip)
+    }
+    if arguments.contains("--link-safe") {
+        policies = linkSafePolicies(policies)
+    }
+    if arguments.contains("--link-auth") {
+        policies = linkSafePolicies(policies)
+        policies.auth = .link
+    }
+    if let link = option(arguments, "--link") {
+        policies = applyClonePolicyList(link, to: policies, policy: .link)
+    }
+    return policies
+}
+
+func applyClonePolicyList(_ list: String, to policies: ClonePolicies, policy: ClonePolicy) -> ClonePolicies {
+    var next = policies
+    for rawToken in list.split(separator: ",").map({ String($0).trimmingCharacters(in: .whitespacesAndNewlines) }) {
+        applyClonePolicyToken(rawToken, policy: policy, to: &next)
+    }
+    return next
+}
+
+func applyClonePolicyToken(_ token: String, policy: ClonePolicy, to policies: inout ClonePolicies) {
+    let safePolicy: ClonePolicy = policy == .link && !clonePolicyTokenCanLink(token) ? .copy : policy
+    switch token {
+    case "config", "config.toml": policies.config = safePolicy
+    case "auth": policies.auth = safePolicy
+    case "skills": policies.skills = safePolicy
+    case "plugins": policies.plugins = safePolicy
+    case "agents": policies.agents = safePolicy
+    case "prompts": policies.prompts = safePolicy
+    case "rules": policies.rules = safePolicy
+    case "profiles": policies.profiles = safePolicy
+    case "memories": policies.memories = safePolicy
+    case "browser", "chrome", "browser-support": policies.browserSupport = safePolicy
+    case "sessions", "logs", "history": policies.sessionsAndLogs = safePolicy
+    case "everything", "all":
+        policies = policy == .skip ? .empty : (policy == .link ? linkAllLinkablePolicies(.full) : .full)
+    default:
+        return
+    }
+}
+
+func clonePolicyTokenCanLink(_ token: String) -> Bool {
+    switch token {
+    case "config", "config.toml", "auth", "skills", "plugins", "agents", "prompts", "rules", "profiles", "everything", "all":
+        return true
+    default:
+        return false
+    }
+}
+
+func linkSafePolicies(_ policies: ClonePolicies) -> ClonePolicies {
+    var next = policies
+    if next.config != .skip { next.config = .link }
+    if next.skills != .skip { next.skills = .link }
+    if next.plugins != .skip { next.plugins = .link }
+    if next.agents != .skip { next.agents = .link }
+    if next.prompts != .skip { next.prompts = .link }
+    if next.rules != .skip { next.rules = .link }
+    if next.profiles != .skip { next.profiles = .link }
+    return next
+}
+
+func linkAllLinkablePolicies(_ policies: ClonePolicies) -> ClonePolicies {
+    var next = linkSafePolicies(policies)
+    if next.auth != .skip { next.auth = .link }
+    return next
 }
 
 func applyCloneList(_ list: String, to options: CloneOptions, value: Bool) -> CloneOptions {
@@ -990,7 +1150,7 @@ homeport clone
 Create a named managed Codex home under ~/.codex-homes.
 
 Usage:
-  homeport clone --preset working-setup|config-only|everything|empty --name NAME [--include LIST] [--exclude LIST]
+  homeport clone --preset working-setup|config-only|everything|empty --name NAME [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
 
 Presets:
   working-setup   Config, auth, skills, plugins, MCP-related files; no sessions/logs.
@@ -1003,10 +1163,20 @@ Examples:
   homeport clone --preset config-only --name "No Auth Test"
   homeport clone --preset empty --name "Blank Slate"
   homeport clone --name "Skills Only" --include skills,plugins --exclude auth,memories,browser
+  homeport clone --name "Shared Skills" --source main --link-safe --include skills,plugins
+  homeport clone --name "Shared Auth" --source main --link-auth --include config,auth
+  homeport clone --name "Linked Config" --source main --include config,auth --link config
+  homeport clone --name "From Template" --source template-home --link-safe
 
 Clone categories:
   config, auth, skills, plugins, agents, prompts, rules, profiles, memories,
   browser, sessions, everything, all
+
+Linking:
+  --link-safe symlinks safe customization categories only: config, skills,
+  plugins, agents, prompts, rules, and profiles. --link-auth also symlinks
+  selected auth.json. --link LIST symlinks specific linkable categories.
+  Browser state, memories, and sessions/logs are always copied or excluded.
 """ }
 
 func createHelp() -> String { """
@@ -1015,12 +1185,13 @@ homeport create
 Create a managed Codex home.
 
 Usage:
-  homeport create --kind clean-room|temporary|clone [--name NAME] [--preset PRESET]
+  homeport create --kind clean-room|temporary|clone [--name NAME] [--preset PRESET] [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
 
 Examples:
   homeport create --kind clean-room --name "Blank Slate"
   homeport create --kind temporary --name "Throwaway UI"
   homeport create --kind clone --preset config-only --name "Config Lab"
+  homeport create --kind clone --preset working-setup --name "Shared Auth" --link-auth
 """ }
 
 func renameHelp() -> String { """
