@@ -1665,9 +1665,12 @@ struct HomeManagePanel: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
+                    Spacer(minLength: 0)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .toggleStyle(.switch)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if isEditing && home.kind != .main {
                 HStack {
@@ -1685,6 +1688,7 @@ struct HomeManagePanel: View {
             }
         }
         .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
     }
 }
