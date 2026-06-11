@@ -214,8 +214,9 @@ func renameHome(_ arguments: [String]) throws {
     guard let home = state.homes.first(where: { $0.slug == selector || $0.name == selector }) else {
         throw HomeportError.homeDoesNotExist(selector)
     }
-    try service.renameHome(id: home.id, name: name)
-    print("Renamed \(selector) to \(name).")
+    let moveFolders = arguments.contains("--move-folders")
+    try service.renameHome(id: home.id, name: name, moveFolders: moveFolders)
+    print("Renamed \(selector) to \(name)\(moveFolders ? " and moved managed folders" : "").")
 }
 
 func deleteHome(_ arguments: [String]) throws {
@@ -1197,13 +1198,16 @@ Examples:
 func renameHelp() -> String { """
 homeport rename
 
-Rename a managed home. The main ~/.codex home cannot be renamed.
+Rename a managed home. The main ~/.codex home cannot be renamed. By default,
+only the display name and selector slug change; pass --move-folders to also
+rename the managed CODEX_HOME folder and matching app profile folder.
 
 Usage:
-  homeport rename SLUG --name NAME
+  homeport rename SLUG --name NAME [--move-folders]
 
 Examples:
   homeport rename config-lab --name "Config Lab 2"
+  homeport rename old-lab --name "New Lab" --move-folders
 """ }
 
 func deleteHelp() -> String { """

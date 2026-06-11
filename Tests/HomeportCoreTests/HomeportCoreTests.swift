@@ -439,13 +439,87 @@ final class HomeportCoreTests: XCTestCase {
         let root = try makeTempRoot()
         let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
         let home = try service.createCleanRoom(name: "Old Name")
+        let originalHomePath = home.homePath
+        let originalProfilePath = try XCTUnwrap(home.profilePath)
+        var stateWithRecent = try service.loadState()
+        stateWithRecent.instances.append(LaunchedInstance(
+            homeID: home.id,
+            homeName: home.name,
+            homePath: home.homePath,
+            profilePath: home.profilePath,
+            target: .desktop,
+            pid: nil,
+            workspacePath: nil,
+            terminalApp: nil
+        ))
+        try service.saveState(stateWithRecent)
 
         try service.renameHome(id: home.id, name: "New Name")
 
         let state = try service.loadState()
         let renamed = try XCTUnwrap(state.homes.first(where: { $0.id == home.id }))
+        let recent = try XCTUnwrap(state.instances.first(where: { $0.homeID == home.id }))
         XCTAssertEqual(renamed.name, "New Name")
         XCTAssertEqual(renamed.slug, "new-name")
+        XCTAssertEqual(renamed.homePath, originalHomePath)
+        XCTAssertEqual(renamed.profilePath, originalProfilePath)
+        XCTAssertEqual(recent.homeName, "New Name")
+        XCTAssertEqual(recent.homePath, originalHomePath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: originalHomePath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: originalProfilePath))
+    }
+
+    func testRenameManagedHomeCanMoveHomeAndProfileFolders() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let template = try service.createCleanRoom(name: "Template")
+        let clone = try service.clone(
+            name: "From Template",
+            preset: .configOnly,
+            options: .configOnly,
+            sourceSelector: template.slug,
+            materialization: .copy
+        )
+        let oldHomePath = template.homePath
+        let oldProfilePath = try XCTUnwrap(template.profilePath)
+        try "profile".write(to: URL(fileURLWithPath: oldProfilePath).appendingPathComponent("marker.txt"), atomically: true, encoding: .utf8)
+
+        try service.renameHome(id: template.id, name: "Renamed Template", moveFolders: true)
+
+        let state = try service.loadState()
+        let renamed = try XCTUnwrap(state.homes.first(where: { $0.id == template.id }))
+        let updatedClone = try XCTUnwrap(state.homes.first(where: { $0.id == clone.id }))
+        XCTAssertEqual(renamed.name, "Renamed Template")
+        XCTAssertEqual(renamed.slug, "renamed-template")
+        XCTAssertEqual(URL(fileURLWithPath: renamed.homePath).lastPathComponent, "renamed-template")
+        XCTAssertEqual(URL(fileURLWithPath: try XCTUnwrap(renamed.profilePath)).lastPathComponent, "renamed-template")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldHomePath))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldProfilePath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: renamed.homePath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: URL(fileURLWithPath: try XCTUnwrap(renamed.profilePath)).appendingPathComponent("marker.txt").path))
+        XCTAssertEqual(updatedClone.sourceHomePath, renamed.homePath)
+    }
+
+    func testRenameManagedHomeMoveRefusesFolderConflict() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let home = try service.createCleanRoom(name: "Old Name")
+        let conflictingHome = root.appendingPathComponent(".codex-homes/new-name", isDirectory: true)
+        try FileManager.default.createDirectory(at: conflictingHome, withIntermediateDirectories: true)
+        let oldHomePath = home.homePath
+        let oldProfilePath = try XCTUnwrap(home.profilePath)
+
+        XCTAssertThrowsError(try service.renameHome(id: home.id, name: "New Name", moveFolders: true)) { error in
+            XCTAssertEqual(error as? HomeportError, HomeportError.homeAlreadyExists(conflictingHome.path))
+        }
+
+        let saved = try XCTUnwrap(try service.loadState().homes.first(where: { $0.id == home.id }))
+        XCTAssertEqual(saved.name, "Old Name")
+        XCTAssertEqual(saved.slug, "old-name")
+        XCTAssertEqual(saved.homePath, oldHomePath)
+        XCTAssertEqual(saved.profilePath, oldProfilePath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: oldHomePath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: oldProfilePath))
     }
 
     func testPinningManagedHomePersists() throws {

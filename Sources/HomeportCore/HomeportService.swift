@@ -89,7 +89,7 @@ public final class HomeportService: @unchecked Sendable {
         )
     }
 
-    public func renameHome(id: UUID, name: String) throws {
+    public func renameHome(id: UUID, name: String, moveFolders: Bool = false) throws {
         var state = try store.load()
         guard let index = state.homes.firstIndex(where: { $0.id == id }) else {
             throw HomeportError.homeDoesNotExist(id.uuidString)
@@ -97,8 +97,42 @@ public final class HomeportService: @unchecked Sendable {
         guard state.homes[index].kind != .main else {
             throw HomeportError.commandFailed("The main ~/.codex home cannot be renamed.")
         }
-        state.homes[index].name = name
-        state.homes[index].slug = uniqueSlug(base: slugify(name), existing: state.homes.enumerated().compactMap { $0.offset == index ? nil : $0.element.slug })
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw HomeportError.invalidName(name)
+        }
+        let oldHomePath = state.homes[index].homePath
+        let oldProfilePath = state.homes[index].profilePath
+        let newSlug = uniqueSlug(
+            base: slugify(trimmedName),
+            existing: state.homes.enumerated().compactMap { $0.offset == index ? nil : $0.element.slug }
+        )
+
+        if moveFolders {
+            let newHomeURL = paths.managedHomesDirectory.appendingPathComponent(newSlug, isDirectory: true)
+            let newProfileURL = paths.profilesDirectory.appendingPathComponent(newSlug, isDirectory: true)
+            try moveManagedHomeFolders(
+                home: state.homes[index],
+                newHomeURL: newHomeURL,
+                newProfileURL: newProfileURL
+            )
+            state.homes[index].homePath = newHomeURL.path
+            state.homes[index].profilePath = newProfileURL.path
+            for sourceIndex in state.homes.indices where state.homes[sourceIndex].sourceHomePath == oldHomePath {
+                state.homes[sourceIndex].sourceHomePath = newHomeURL.path
+            }
+            for instanceIndex in state.instances.indices where state.instances[instanceIndex].homeID == id {
+                state.instances[instanceIndex].homePath = newHomeURL.path
+                if oldProfilePath != nil {
+                    state.instances[instanceIndex].profilePath = newProfileURL.path
+                }
+            }
+        }
+        state.homes[index].name = trimmedName
+        state.homes[index].slug = newSlug
+        for instanceIndex in state.instances.indices where state.instances[instanceIndex].homeID == id {
+            state.instances[instanceIndex].homeName = trimmedName
+        }
         try store.save(state)
     }
 
@@ -359,6 +393,56 @@ public final class HomeportService: @unchecked Sendable {
         } catch {
             try? fileManager.removeItem(at: homeURL)
             try? fileManager.removeItem(at: profileURL)
+            throw error
+        }
+    }
+
+    private func moveManagedHomeFolders(
+        home: CodexHome,
+        newHomeURL: URL,
+        newProfileURL: URL
+    ) throws {
+        let oldHomeURL = URL(fileURLWithPath: home.homePath, isDirectory: true)
+        let oldProfileURL = home.profilePath.map { URL(fileURLWithPath: $0, isDirectory: true) }
+
+        guard oldHomeURL.standardizedFileURL.deletingLastPathComponent().path == paths.managedHomesDirectory.standardizedFileURL.path else {
+            throw HomeportError.commandFailed("Only managed home folders under \(paths.managedHomesDirectory.path) can be moved.")
+        }
+        if let oldProfileURL {
+            guard oldProfileURL.standardizedFileURL.deletingLastPathComponent().path == paths.profilesDirectory.standardizedFileURL.path else {
+                throw HomeportError.commandFailed("Only managed profile folders under \(paths.profilesDirectory.path) can be moved.")
+            }
+        }
+
+        guard oldHomeURL.standardizedFileURL.path != newHomeURL.standardizedFileURL.path else {
+            return
+        }
+        guard fileManager.fileExists(atPath: oldHomeURL.path) else {
+            throw HomeportError.homeDoesNotExist(oldHomeURL.path)
+        }
+        if let oldProfileURL {
+            guard fileManager.fileExists(atPath: oldProfileURL.path) else {
+                throw HomeportError.homeDoesNotExist(oldProfileURL.path)
+            }
+        }
+        guard !fileManager.fileExists(atPath: newHomeURL.path) else {
+            throw HomeportError.homeAlreadyExists(newHomeURL.path)
+        }
+        guard !fileManager.fileExists(atPath: newProfileURL.path) else {
+            throw HomeportError.homeAlreadyExists(newProfileURL.path)
+        }
+
+        try fileManager.createDirectory(at: paths.managedHomesDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: paths.profilesDirectory, withIntermediateDirectories: true)
+        try fileManager.moveItem(at: oldHomeURL, to: newHomeURL)
+        do {
+            if let oldProfileURL {
+                try fileManager.moveItem(at: oldProfileURL, to: newProfileURL)
+            } else {
+                try fileManager.createDirectory(at: newProfileURL, withIntermediateDirectories: true)
+            }
+        } catch {
+            try? fileManager.moveItem(at: newHomeURL, to: oldHomeURL)
             throw error
         }
     }

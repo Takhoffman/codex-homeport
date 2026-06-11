@@ -11,7 +11,7 @@ struct CodexMultihomeApp: App {
                 .environmentObject(model)
                 .frame(width: 390)
         } label: {
-            MenuBarBadgeIcon(title: model.channel.appName, symbol: model.menuIcon, showsBadge: model.updateAvailable)
+            MenuBarBadgeIcon(title: model.channel.appName, symbol: model.menuIcon, isDev: model.channel == .dev, showsBadge: model.updateAvailable)
         }
         .menuBarExtraStyle(.window)
 
@@ -26,13 +26,14 @@ struct CodexMultihomeApp: App {
 struct MenuBarBadgeIcon: View {
     var title: String
     var symbol: String
+    var isDev: Bool = false
     var showsBadge: Bool
 
     var body: some View {
-        Label {
-            Text(title)
-        } icon: {
+        HStack(spacing: 3) {
             Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
                 .overlay(alignment: .topTrailing) {
                     if showsBadge {
                         Circle()
@@ -40,6 +41,11 @@ struct MenuBarBadgeIcon: View {
                             .frame(width: 6, height: 6)
                             .offset(x: 3, y: -3)
                     }
+                }
+            if isDev {
+                Text("DEV")
+                    .font(.system(size: 9, weight: .black, design: .rounded))
+                    .foregroundStyle(.purple)
             }
         }
         .help(showsBadge ? "\(title) update available" : title)
@@ -222,12 +228,15 @@ final class HomeportModel: ObservableObject {
         }
     }
 
-    func renameHome(_ home: CodexHome, name: String) {
+    @discardableResult
+    func renameHome(_ home: CodexHome, name: String, moveFolders: Bool = false) -> Bool {
         do {
-            try service.renameHome(id: home.id, name: name)
-            refresh(statusMessage: "Renamed \(home.name)")
+            try service.renameHome(id: home.id, name: name, moveFolders: moveFolders)
+            refresh(statusMessage: "Renamed to \(name.trimmingCharacters(in: .whitespacesAndNewlines))")
+            return true
         } catch {
             status = error.localizedDescription
+            return false
         }
     }
 
@@ -631,116 +640,113 @@ struct HomeportMenuView: View {
     @State private var detailReturnTab: MenuTab = .favorites
     @State private var isEditingDetail = false
     @State private var editedName = ""
+    @State private var moveFoldersOnRename = false
     @State private var newHomeMode: NewHomeMode = .clone
     @State private var newHomeLaunchTarget: LaunchTarget = .desktop
     @State private var showsAddFavoriteSheet = false
     @State private var pendingDeleteHome: CodexHome?
 
     var body: some View {
-        VStack(spacing: 0) {
-            PhoneMenuHeader(
-                title: headerTitle,
-                subtitle: headerSubtitle,
-                leftTitle: leftActionTitle,
-                showsLeftAction: showsLeftAction,
-                rightTitle: focusedHome == nil ? nil : (isEditingDetail ? "Done" : "Edit"),
-                showsAddAndRefresh: focusedHome == nil,
-                leftAction: handleLeftAction,
-                rightAction: toggleDetailEdit,
-                addAction: {
-                    if selectedTab == .favorites {
-                        showsAddFavoriteSheet = true
-                        isEditingList = false
-                        return
-                    }
-                    focusedHome = nil
-                    selectedTab = .new
-                    isEditingList = false
-                },
-                refreshAction: { model.refresh() }
-            )
-
-            if focusedHome == nil && model.updateAvailable {
-                UpdateAvailableBanner(
-                    openSettings: {
-                        selectedTab = .settings
+        ZStack {
+            VStack(spacing: 0) {
+                PhoneMenuHeader(
+                    title: headerTitle,
+                    subtitle: headerSubtitle,
+                    leftTitle: leftActionTitle,
+                    showsLeftAction: showsLeftAction,
+                    rightTitle: focusedHome == nil ? nil : (isEditingDetail ? "Done" : "Edit"),
+                    showsAddAndRefresh: focusedHome == nil,
+                    leftAction: handleLeftAction,
+                    rightAction: handleDetailRightAction,
+                    addAction: {
+                        if selectedTab == .favorites {
+                            showsAddFavoriteSheet = true
+                            isEditingList = false
+                            return
+                        }
+                        focusedHome = nil
+                        selectedTab = .new
                         isEditingList = false
                     },
-                    dismiss: { model.dismissUpdate() }
+                    refreshAction: { model.refresh() }
                 )
-                .padding(.horizontal, 14)
-                .padding(.bottom, 8)
-            }
 
-            if model.status != "Ready" {
-                StatusBanner(message: model.status)
+                if focusedHome == nil && model.updateAvailable {
+                    UpdateAvailableBanner(
+                        openSettings: {
+                            selectedTab = .settings
+                            isEditingList = false
+                        },
+                        dismiss: { model.dismissUpdate() }
+                    )
                     .padding(.horizontal, 14)
                     .padding(.bottom, 8)
-            }
+                }
 
-            ScrollView {
-                Group {
-                    if let focusedHome {
-                        FocusedHomeView(
-                            home: focusedHome,
-                            isEditing: isEditingDetail,
-                            editedName: $editedName,
-                            launch: { target in model.launch(focusedHome.slug, target: target) },
-                            setPinned: { pinned in
-                                model.setHomePinned(focusedHome, pinned: pinned)
-                                self.focusedHome = model.state.homes.first { $0.id == focusedHome.id } ?? focusedHome
-                            },
-                            delete: {
-                                requestDelete(focusedHome)
-                            },
-                            saveName: {
-                                model.renameHome(focusedHome, name: editedName)
-                                self.focusedHome = model.state.homes.first { $0.id == focusedHome.id } ?? focusedHome
-                            }
-                        )
-                    } else {
-                        tabContent
+                if model.status != "Ready" {
+                    StatusBanner(message: model.status)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
+                }
+
+                ScrollView {
+                    Group {
+                        if let focusedHome {
+                            FocusedHomeView(
+                                home: focusedHome,
+                                isEditing: isEditingDetail,
+                                editedName: $editedName,
+                                moveFoldersOnRename: $moveFoldersOnRename,
+                                launch: { target in model.launch(focusedHome.slug, target: target) },
+                                setPinned: { pinned in
+                                    model.setHomePinned(focusedHome, pinned: pinned)
+                                    self.focusedHome = model.state.homes.first { $0.id == focusedHome.id } ?? focusedHome
+                                },
+                                delete: {
+                                    requestDelete(focusedHome)
+                                }
+                            )
+                        } else {
+                            tabContent
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 12)
+                }
+                .frame(minHeight: 360, maxHeight: 560)
+
+                if focusedHome == nil {
+                    PhoneTabBar(selectedTab: $selectedTab) {
+                        isEditingList = false
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 12)
             }
-            .frame(minHeight: 360, maxHeight: 560)
+            .frame(width: 390)
+            .blur(radius: pendingDeleteHome == nil ? 0 : 1.5)
+            .disabled(pendingDeleteHome != nil)
 
-            if focusedHome == nil {
-                PhoneTabBar(selectedTab: $selectedTab) {
-                    isEditingList = false
-                }
+            if let pendingDeleteHome {
+                DeleteHomeConfirmation(
+                    home: pendingDeleteHome,
+                    confirm: { deleteHome(pendingDeleteHome) },
+                    cancel: { self.pendingDeleteHome = nil }
+                )
+                .padding(24)
+                .transition(.scale(scale: 0.96).combined(with: .opacity))
+                .zIndex(1)
             }
         }
-        .frame(width: 390)
+        .animation(.easeOut(duration: 0.16), value: pendingDeleteHome?.id)
         .onChange(of: selectedTab) { _ in
             isEditingList = false
         }
         .onChange(of: focusedHome?.id) { _ in
             editedName = focusedHome?.name ?? ""
+            moveFoldersOnRename = false
         }
         .sheet(isPresented: $showsAddFavoriteSheet) {
             AddFavoriteSheet()
                 .environmentObject(model)
-        }
-        .confirmationDialog(
-            "Move \(pendingDeleteHome?.name ?? "home") to Trash?",
-            isPresented: Binding(
-                get: { pendingDeleteHome != nil },
-                set: { if !$0 { pendingDeleteHome = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: pendingDeleteHome
-        ) { home in
-            Button("Move \(home.name) to Trash", role: .destructive) {
-                deleteHome(home)
-            }
-            Button("Cancel", role: .cancel) {
-                pendingDeleteHome = nil
-            }
-        } message: { home in
-            Text("This removes the managed home and profile from Multihome and moves their files to Trash.")
         }
     }
 
@@ -792,6 +798,9 @@ struct HomeportMenuView: View {
 
     private var leftActionTitle: String {
         if focusedHome != nil {
+            if isEditingDetail {
+                return "Cancel"
+            }
             return "‹ \(detailReturnTab.title)"
         }
         return isEditingList ? "Done" : "Edit"
@@ -799,6 +808,10 @@ struct HomeportMenuView: View {
 
     private func handleLeftAction() {
         if focusedHome != nil {
+            if isEditingDetail {
+                cancelDetailEdit()
+                return
+            }
             focusedHome = nil
             isEditingDetail = false
             selectedTab = detailReturnTab
@@ -809,14 +822,52 @@ struct HomeportMenuView: View {
         }
     }
 
-    private func toggleDetailEdit() {
-        isEditingDetail.toggle()
+    private func handleDetailRightAction() {
+        if isEditingDetail {
+            saveDetailEdits()
+            return
+        }
+        editedName = focusedHome?.name ?? ""
+        moveFoldersOnRename = false
+        isEditingDetail = true
+    }
+
+    private func cancelDetailEdit() {
+        editedName = focusedHome?.name ?? ""
+        moveFoldersOnRename = false
+        isEditingDetail = false
+    }
+
+    private func saveDetailEdits() {
+        guard let focusedHome else {
+            isEditingDetail = false
+            return
+        }
+        let trimmedName = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            model.status = "Home name cannot be empty."
+            return
+        }
+        let hasChanges = trimmedName != focusedHome.name || moveFoldersOnRename
+        guard hasChanges else {
+            isEditingDetail = false
+            return
+        }
+        guard model.renameHome(focusedHome, name: trimmedName, moveFolders: moveFoldersOnRename) else {
+            return
+        }
+        let refreshedHome = model.state.homes.first { $0.id == focusedHome.id } ?? focusedHome
+        self.focusedHome = refreshedHome
+        editedName = refreshedHome.name
+        moveFoldersOnRename = false
+        isEditingDetail = false
     }
 
     private func openDetail(_ home: CodexHome) {
         detailReturnTab = selectedTab
         focusedHome = home
         editedName = home.name
+        moveFoldersOnRename = false
         isEditingList = false
         isEditingDetail = false
     }
@@ -842,6 +893,7 @@ struct HomeportMenuView: View {
         selectedTab = .homes
         focusedHome = refreshedHome
         editedName = refreshedHome.name
+        moveFoldersOnRename = false
         isEditingList = false
         isEditingDetail = false
     }
@@ -862,6 +914,50 @@ struct HomeportMenuView: View {
             isEditingDetail = false
             selectedTab = detailReturnTab
         }
+    }
+}
+
+struct DeleteHomeConfirmation: View {
+    var home: CodexHome
+    var confirm: () -> Void
+    var cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Move \(home.name) to Trash?")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("This removes the managed home and profile from Multihome and moves their files to Trash.")
+                .font(.callout)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 10) {
+                Button(role: .destructive, action: confirm) {
+                    Text("Move to Trash")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+
+                Button(action: cancel) {
+                    Text("Cancel")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(.quaternary)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 24, y: 12)
     }
 }
 
@@ -1493,16 +1589,19 @@ struct FocusedHomeView: View {
     var home: CodexHome
     var isEditing: Bool
     @Binding var editedName: String
+    @Binding var moveFoldersOnRename: Bool
     var launch: (LaunchTarget) -> Void
     var setPinned: (Bool) -> Void
     var delete: () -> Void
-    var saveName: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HomeDetailHero(
                 home: home,
                 isPinned: model.isPinned(home),
+                isEditing: isEditing,
+                editedName: $editedName,
+                moveFoldersOnRename: $moveFoldersOnRename,
                 authSummary: model.authSummary(for: home),
                 icon: icon(for: home),
                 launch: launch
@@ -1529,10 +1628,9 @@ struct FocusedHomeView: View {
                 home: home,
                 isEditing: isEditing,
                 isPinned: model.isPinned(home),
-                editedName: $editedName,
+                moveFoldersOnRename: $moveFoldersOnRename,
                 setPinned: setPinned,
-                delete: delete,
-                saveName: saveName
+                delete: delete
             )
         }
     }
@@ -1550,6 +1648,9 @@ struct FocusedHomeView: View {
 struct HomeDetailHero: View {
     var home: CodexHome
     var isPinned: Bool
+    var isEditing: Bool
+    @Binding var editedName: String
+    @Binding var moveFoldersOnRename: Bool
     var authSummary: String
     var icon: String
     var launch: (LaunchTarget) -> Void
@@ -1564,9 +1665,16 @@ struct HomeDetailHero: View {
                     .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
-                        Text(home.name)
-                            .font(.title3.weight(.bold))
-                            .lineLimit(1)
+                        if isEditing && home.kind != .main {
+                            TextField("Home name", text: $editedName)
+                                .font(.title3.weight(.bold))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(minWidth: 120)
+                        } else {
+                            Text(home.name)
+                                .font(.title3.weight(.bold))
+                                .lineLimit(1)
+                        }
                         if isPinned {
                             Image(systemName: "star.fill")
                                 .font(.caption.weight(.semibold))
@@ -1640,10 +1748,9 @@ struct HomeManagePanel: View {
     var home: CodexHome
     var isEditing: Bool
     var isPinned: Bool
-    @Binding var editedName: String
+    @Binding var moveFoldersOnRename: Bool
     var setPinned: (Bool) -> Void
     var delete: () -> Void
-    var saveName: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1673,12 +1780,17 @@ struct HomeManagePanel: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if isEditing && home.kind != .main {
-                HStack {
-                    TextField("Name", text: $editedName)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Save", action: saveName)
-                        .disabled(editedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || editedName == home.name)
+                Toggle(isOn: $moveFoldersOnRename) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Move folders to match name")
+                            .font(.caption.weight(.semibold))
+                        Text("Renames the managed home and app profile folders.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
+                .toggleStyle(.switch)
                 Button("Review Delete", role: .destructive, action: delete)
                     .buttonStyle(.bordered)
             } else {
@@ -2297,6 +2409,7 @@ struct HomeGrid: View {
 struct HomeCard: View {
     @EnvironmentObject var model: HomeportModel
     @State private var editedName: String = ""
+    @State private var moveFoldersOnRename = false
 
     var home: CodexHome
 
@@ -2324,10 +2437,12 @@ struct HomeCard: View {
                     TextField("Name", text: $editedName)
                         .textFieldStyle(.roundedBorder)
                     Button("Save") {
-                        model.renameHome(home, name: editedName)
+                        model.renameHome(home, name: editedName, moveFolders: moveFoldersOnRename)
+                        moveFoldersOnRename = false
                     }
-                    .disabled(editedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || editedName == home.name)
+                    .disabled(saveDisabled)
                 }
+                Toggle("Move folders to match name", isOn: $moveFoldersOnRename)
             }
 
             Text(home.homePath)
@@ -2357,10 +2472,17 @@ struct HomeCard: View {
         )
         .onAppear {
             editedName = home.name
+            moveFoldersOnRename = false
         }
         .onChange(of: home.name) { newName in
             editedName = newName
+            moveFoldersOnRename = false
         }
+    }
+
+    private var saveDisabled: Bool {
+        editedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || (editedName == home.name && !moveFoldersOnRename)
     }
 
     private func icon(for home: CodexHome) -> String {
