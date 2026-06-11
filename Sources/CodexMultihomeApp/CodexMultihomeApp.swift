@@ -728,7 +728,7 @@ struct HomeportMenuView: View {
             if let pendingDeleteHome {
                 DeleteHomeConfirmation(
                     home: pendingDeleteHome,
-                    confirm: { deleteHome(pendingDeleteHome) },
+                    confirm: { confirmDeleteHome(pendingDeleteHome) },
                     cancel: { self.pendingDeleteHome = nil }
                 )
                 .padding(24)
@@ -906,9 +906,9 @@ struct HomeportMenuView: View {
         pendingDeleteHome = home
     }
 
-    private func deleteHome(_ home: CodexHome) {
-        let didDelete = model.deleteHome(home)
+    private func confirmDeleteHome(_ home: CodexHome) {
         pendingDeleteHome = nil
+        let didDelete = model.deleteHome(home)
         if didDelete && focusedHome?.id == home.id {
             focusedHome = nil
             isEditingDetail = false

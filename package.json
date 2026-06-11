@@ -1,6 +1,6 @@
 {
   "name": "codex-multihome",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "A macOS menu bar launcher and hygiene tool for managing multiple Codex homes.",
   "license": "MIT",
   "homepage": "https://github.com/Takhoffman/codex-multihome#readme",
