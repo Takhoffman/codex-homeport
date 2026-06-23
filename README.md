@@ -1,8 +1,12 @@
-![Codex Multihome banner](docs/hero.png)
-
 # Codex Multihome
 
-Codex Multihome is a macOS launcher and hygiene tool for running multiple Codex homes without losing track of which state you opened.
+![Codex Multihome banner](docs/hero.png)
+
+[![CI](https://github.com/Takhoffman/codex-multihome/actions/workflows/ci.yml/badge.svg)](https://github.com/Takhoffman/codex-multihome/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/codex-multihome.svg)](https://www.npmjs.com/package/codex-multihome)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+Codex Multihome is a macOS menu bar launcher and CLI for safely running multiple Codex homes without losing track of which state you opened.
 
 It can launch Codex as the desktop app or in a terminal session while setting `CODEX_HOME` only for that child process. It does not use `launchctl setenv CODEX_HOME`.
 
@@ -165,9 +169,10 @@ git push origin main vX.Y.Z
 ```
 
 Pushing a `vX.Y.Z` tag runs the GitHub Release workflow. The workflow tests the
-package, publishes `codex-multihome` to npm using the `NPM_TOKEN` repository
-secret, and creates a GitHub Release from `releases/vX.Y.Z.md`. Users update
-with `npm install -g codex-multihome@latest`.
+package, publishes `codex-multihome` to npm with trusted publishing and
+provenance, and creates a GitHub Release from `releases/vX.Y.Z.md`. Configure
+the npm package for trusted publishing from this repository before cutting a
+release. Users update with `npm install -g codex-multihome@latest`.
 
 Autostart is managed by a user LaunchAgent:
 

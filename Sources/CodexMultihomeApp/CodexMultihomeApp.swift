@@ -139,15 +139,18 @@ final class HomeportModel: ObservableObject {
         return status.detail ?? "No stored auth in this home"
     }
 
-    func launch(_ selector: String, target: LaunchTarget) {
+    @discardableResult
+    func launch(_ selector: String, target: LaunchTarget) -> Bool {
         do {
             let actualSelector = modelSelector(for: selector)
             let missingLinks = try service.brokenLinkedTargets(selector: actualSelector)
             let instance = try service.launch(selector: actualSelector, target: target, workspace: workspacePath)
             let warning = missingLinks.isEmpty ? "" : "; linked paths missing: \(missingLinks.joined(separator: ", "))"
             refresh(statusMessage: "Opened \(instance.homeName) in \(target.rawValue)\(warning)")
+            return true
         } catch {
             status = error.localizedDescription
+            return false
         }
     }
 
@@ -887,7 +890,8 @@ struct HomeportMenuView: View {
         guard let createdHome else {
             return
         }
-        model.launch(createdHome.slug, target: newHomeLaunchTarget)
+        let didLaunch = model.launch(createdHome.slug, target: newHomeLaunchTarget)
+        let launchFailure = model.status
         let refreshedHome = model.state.homes.first { $0.id == createdHome.id } ?? createdHome
         detailReturnTab = .homes
         selectedTab = .homes
@@ -896,6 +900,9 @@ struct HomeportMenuView: View {
         moveFoldersOnRename = false
         isEditingList = false
         isEditingDetail = false
+        model.status = didLaunch
+            ? "Created and opened \(refreshedHome.name)"
+            : "Created \(refreshedHome.name), but open failed: \(launchFailure)"
     }
 
     private func requestDelete(_ home: CodexHome) {

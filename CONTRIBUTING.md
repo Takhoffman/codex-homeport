@@ -41,3 +41,14 @@ Please include:
 - Manual verification steps
 - Screenshots for menu bar or console UI changes
 - Any migration impact for `homeport.json`
+
+## Maintainer Release Checklist
+
+Before tagging a release:
+
+- Keep `main` protected with CI required before merge.
+- Confirm npm trusted publishing is configured for this GitHub repository.
+- Update `HomeportCore/AppVersion.swift`, `package.json`, `CHANGELOG.md`, and
+  `releases/vX.Y.Z.md` together.
+- Run `npm run release:check`.
+- Tag with `git tag vX.Y.Z` and push `main` plus the tag.
