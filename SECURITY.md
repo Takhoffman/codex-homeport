@@ -4,7 +4,8 @@ Codex Multihome launches local Codex processes with explicit `CODEX_HOME` and ap
 
 ## Reporting
 
-Please report security issues privately through GitHub Security Advisories once the repository is public. Do not open a public issue for vulnerabilities.
+Please report security issues privately through GitHub Security Advisories. Do
+not open a public issue for vulnerabilities.
 
 ## Sensitive Areas
 
