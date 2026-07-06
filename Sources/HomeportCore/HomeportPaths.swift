@@ -108,8 +108,15 @@ public struct HomeportPaths: Sendable {
         appSupportDirectory.appendingPathComponent("update.log")
     }
 
+    public var codexAppBundle: URL {
+        URL(fileURLWithPath: "/Applications/Codex.app", isDirectory: true)
+    }
+
     public var codexAppExecutable: URL {
-        URL(fileURLWithPath: "/Applications/Codex.app/Contents/MacOS/Codex")
+        codexAppBundle
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("MacOS", isDirectory: true)
+            .appendingPathComponent("Codex")
     }
 
     public var normalCodexProfile: URL {

@@ -34,22 +34,23 @@ public struct Launcher {
             try fileManager.createDirectory(at: URL(fileURLWithPath: profilePath), withIntermediateDirectories: true)
         }
 
-        let process = Process()
-        process.executableURL = paths.codexAppExecutable
+        var arguments: [String] = []
         if let profilePath = home.profilePath {
-            process.arguments = ["--user-data-dir=\(profilePath)"]
+            arguments = ["--user-data-dir=\(profilePath)"]
         }
         var environment = ProcessInfo.processInfo.environment
         environment["CODEX_HOME"] = home.homePath
-        process.environment = environment
-        try process.run()
-        activate(processID: process.processIdentifier)
-        return process.processIdentifier
-    }
 
-    private func activate(processID: Int32) {
-        NSRunningApplication(processIdentifier: processID)?
-            .activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        let app = try NSWorkspace.shared.launchApplication(
+            at: paths.codexAppBundle,
+            options: [.newInstance, .async],
+            configuration: [
+                .arguments: arguments,
+                .environment: environment
+            ]
+        )
+        app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        return app.processIdentifier
     }
 
     private func launchTerminal(

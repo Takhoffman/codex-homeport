@@ -814,6 +814,13 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(HomeportChannel.current(environment: ["HOMEPORT_CHANNEL": "live"], bundle: .main), .live)
     }
 
+    func testCodexAppExecutableIsInsideBundle() {
+        let paths = HomeportPaths()
+
+        XCTAssertEqual(paths.codexAppBundle.path, "/Applications/Codex.app")
+        XCTAssertEqual(paths.codexAppExecutable.path, "/Applications/Codex.app/Contents/MacOS/Codex")
+    }
+
     private func makeTempRoot() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
