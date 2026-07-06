@@ -674,6 +674,8 @@ struct HomeportMenuView: View {
     @State private var moveHomePathOnEdit = false
     @State private var newHomeMode: NewHomeMode = .clone
     @State private var newHomeLaunchTarget: LaunchTarget = .desktop
+    @State private var newHomeName = ""
+    @State private var newHomeNameEdited = false
     @State private var newHomePath = ""
     @State private var newHomePathEdited = false
     @State private var showsAddFavoriteSheet = false
@@ -811,8 +813,11 @@ struct HomeportMenuView: View {
             NewHomeTab(
                 mode: $newHomeMode,
                 launchTarget: $newHomeLaunchTarget,
+                customName: $newHomeName,
+                customNameEdited: $newHomeNameEdited,
                 customPath: $newHomePath,
                 customPathEdited: $newHomePathEdited,
+                suggestedName: suggestedNewHomeName(for: newHomeMode),
                 suggestedPath: suggestedNewHomePath(for: newHomeMode),
                 create: createNewHome
             )
@@ -933,16 +938,19 @@ struct HomeportMenuView: View {
 
     private func createNewHome() {
         let suggestedName = suggestedNewHomeName(for: newHomeMode)
+        let pathBackedName = suggestedHomeName(fromHomePath: newHomePath)
+        let name = newHomeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName = name.isEmpty ? (pathBackedName ?? suggestedName) : name
         let createdHome: CodexHome?
         switch newHomeMode {
         case .clone:
-            createdHome = model.cloneWorkingSetup(name: suggestedName, homePath: newHomePath)
+            createdHome = model.cloneWorkingSetup(name: resolvedName, homePath: newHomePath)
         case .cleanRoom:
-            createdHome = model.cleanRoom(name: suggestedName, homePath: newHomePath)
+            createdHome = model.cleanRoom(name: resolvedName, homePath: newHomePath)
         case .temporary:
-            createdHome = model.createTemporaryHome(name: suggestedName, homePath: newHomePath)
+            createdHome = model.createTemporaryHome(name: resolvedName, homePath: newHomePath)
         case .configOnly:
-            createdHome = model.cloneConfigOnly(name: suggestedName, homePath: newHomePath)
+            createdHome = model.cloneConfigOnly(name: resolvedName, homePath: newHomePath)
         }
         guard let createdHome else {
             return
@@ -957,6 +965,8 @@ struct HomeportMenuView: View {
         editedHomePath = refreshedHome.homePath
         moveFoldersOnRename = false
         moveHomePathOnEdit = false
+        newHomeName = ""
+        newHomeNameEdited = false
         newHomePath = ""
         newHomePathEdited = false
         isEditingList = false
@@ -1483,8 +1493,11 @@ struct NewHomeTab: View {
     @EnvironmentObject var model: HomeportModel
     @Binding var mode: NewHomeMode
     @Binding var launchTarget: LaunchTarget
+    @Binding var customName: String
+    @Binding var customNameEdited: Bool
     @Binding var customPath: String
     @Binding var customPathEdited: Bool
+    var suggestedName: String
     var suggestedPath: String
     var create: () -> Void
 
@@ -1513,12 +1526,24 @@ struct NewHomeTab: View {
                 Text("Terminal").tag(LaunchTarget.terminal)
             }
             .pickerStyle(.segmented)
+            SectionLabel("Name")
+            TextField("Home name", text: Binding(
+                get: { customName.isEmpty && !customNameEdited ? activeSuggestedName : customName },
+                set: { value in
+                    customName = value
+                    customNameEdited = true
+                }
+            ))
+                .textFieldStyle(.roundedBorder)
             SectionLabel("Path")
             TextField("CODEX_HOME path", text: Binding(
                 get: { customPath.isEmpty && !customPathEdited ? suggestedPath : customPath },
                 set: { value in
                     customPath = value
                     customPathEdited = true
+                    if !customNameEdited {
+                        customName = suggestedHomeName(fromHomePath: value) ?? suggestedName
+                    }
                 }
             ))
                 .textFieldStyle(.roundedBorder)
@@ -1548,12 +1573,28 @@ struct NewHomeTab: View {
                 customPath = suggestedPath
                 customPathEdited = false
             }
+            if customName.isEmpty {
+                customName = activeSuggestedName
+                customNameEdited = false
+            }
         }
         .onChange(of: suggestedPath) { nextPath in
             if !customPathEdited {
                 customPath = nextPath
             }
         }
+        .onChange(of: suggestedName) { nextName in
+            if !customNameEdited && !customPathEdited {
+                customName = nextName
+            }
+        }
+    }
+
+    private var activeSuggestedName: String {
+        if customPathEdited {
+            return suggestedHomeName(fromHomePath: customPath) ?? suggestedName
+        }
+        return suggestedName
     }
 }
 

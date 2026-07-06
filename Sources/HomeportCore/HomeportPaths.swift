@@ -174,6 +174,16 @@ public func slugify(_ raw: String) -> String {
     return trimmed.isEmpty ? "home" : trimmed
 }
 
+public func suggestedHomeName(fromHomePath path: String) -> String? {
+    let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        return nil
+    }
+    let expandedPath = NSString(string: trimmed).expandingTildeInPath
+    let lastComponent = URL(fileURLWithPath: expandedPath, isDirectory: true).standardizedFileURL.lastPathComponent
+    return lastComponent.isEmpty ? nil : lastComponent
+}
+
 public func timestampSlug(prefix: String, date: Date = Date()) -> String {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")

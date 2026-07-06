@@ -3,6 +3,7 @@
 Release notes live in `releases/` so GitHub releases and the package changelog
 can share the same source text.
 
+- [v0.8.5](releases/v0.8.5.md)
 - [v0.8.4](releases/v0.8.4.md)
 - [v0.8.3](releases/v0.8.3.md)
 - [v0.8.2](releases/v0.8.2.md)

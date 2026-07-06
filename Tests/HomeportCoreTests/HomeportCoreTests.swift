@@ -11,6 +11,12 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(shellQuote("/tmp/that's fine"), "'/tmp/that'\\''s fine'")
     }
 
+    func testSuggestedHomeNameUsesLastPathComponent() {
+        XCTAssertEqual(suggestedHomeName(fromHomePath: "/tmp/marketfinch.com"), "marketfinch.com")
+        XCTAssertEqual(suggestedHomeName(fromHomePath: " ~/homes/research-lab/ "), "research-lab")
+        XCTAssertNil(suggestedHomeName(fromHomePath: "   "))
+    }
+
     func testConfigOnlyCloneCopiesExpectedFiles() throws {
         let root = try makeTempRoot()
         let source = root.appendingPathComponent("source")
@@ -532,6 +538,17 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(home.homePath, customHome.standardizedFileURL.path)
         XCTAssertTrue(FileManager.default.fileExists(atPath: customHome.path))
         XCTAssertEqual(try service.loadState().homes.first(where: { $0.id == home.id })?.homePath, customHome.standardizedFileURL.path)
+    }
+
+    func testCreateCleanRoomWithPathCanInferName() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let customHome = root.appendingPathComponent("marketfinch.com", isDirectory: true)
+
+        let home = try service.createCleanRoom(homePath: customHome.path)
+
+        XCTAssertEqual(home.name, "marketfinch.com")
+        XCTAssertEqual(home.slug, "marketfinch-com")
     }
 
     func testCloneCanUseCustomHomePath() throws {

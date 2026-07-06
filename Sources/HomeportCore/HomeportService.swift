@@ -38,9 +38,11 @@ public final class HomeportService: @unchecked Sendable {
     }
 
     public func createCleanRoom(name: String? = nil, homePath: String? = nil) throws -> CodexHome {
-        let slug = uniqueSlug(base: slugify(name ?? timestampSlug(prefix: "clean-room")))
+        let resolvedName = name ?? homePath.flatMap(suggestedHomeName(fromHomePath:)) ?? "Clean Room"
+        let slugBase = name == nil && homePath == nil ? timestampSlug(prefix: "clean-room") : slugify(resolvedName)
+        let slug = uniqueSlug(base: slugBase)
         return try createManagedHome(
-            name: name ?? "Clean Room",
+            name: resolvedName,
             slug: slug,
             kind: .cleanRoom,
             preset: .empty,
@@ -50,9 +52,11 @@ public final class HomeportService: @unchecked Sendable {
     }
 
     public func createTemporary(name: String? = nil, homePath: String? = nil) throws -> CodexHome {
-        let slug = uniqueSlug(base: slugify(name ?? timestampSlug(prefix: "temp")))
+        let resolvedName = name ?? homePath.flatMap(suggestedHomeName(fromHomePath:)) ?? "Temporary"
+        let slugBase = name == nil && homePath == nil ? timestampSlug(prefix: "temp") : slugify(resolvedName)
+        let slug = uniqueSlug(base: slugBase)
         return try createManagedHome(
-            name: name ?? "Temporary",
+            name: resolvedName,
             slug: slug,
             kind: .temporary,
             preset: .empty,

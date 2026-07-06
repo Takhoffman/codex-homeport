@@ -160,13 +160,17 @@ func clone(_ arguments: [String]) throws {
     let basePolicies = hasExplicitPreset ? ClonePolicies.preset(preset) : state.preferences.clonePolicies
     let clonePolicies = clonePolicies(from: arguments, base: basePolicies)
     let sourceSelector = option(arguments, "--source") ?? "main"
-    let name = option(arguments, "--name") ?? positionalName(in: arguments) ?? "Multihome Clone"
+    let homePath = option(arguments, "--path")
+    let name = option(arguments, "--name")
+        ?? positionalName(in: arguments)
+        ?? homePath.flatMap(suggestedHomeName(fromHomePath:))
+        ?? "Multihome Clone"
     let home = try service.clone(
         name: name,
         preset: preset,
         policies: clonePolicies,
         sourceSelector: sourceSelector,
-        homePath: option(arguments, "--path")
+        homePath: homePath
     )
     printCreatedHome(home)
 }
@@ -187,13 +191,15 @@ func printCreatedHome(_ home: CodexHome) {
 
 func createHome(_ arguments: [String]) throws {
     let kind = option(arguments, "--kind") ?? arguments.first ?? "clean-room"
+    let homePath = option(arguments, "--path")
     let name = option(arguments, "--name")
+        ?? homePath.flatMap(suggestedHomeName(fromHomePath:))
     let home: CodexHome
     switch kind {
     case "clean-room", "cleanRoom":
-        home = try service.createCleanRoom(name: name, homePath: option(arguments, "--path"))
+        home = try service.createCleanRoom(name: name, homePath: homePath)
     case "temporary", "temp":
-        home = try service.createTemporary(name: name, homePath: option(arguments, "--path"))
+        home = try service.createTemporary(name: name, homePath: homePath)
     case "clone":
         let preset = option(arguments, "--preset").flatMap(ClonePreset.init(rawValue:)) ?? .workingSetup
         home = try service.clone(
@@ -201,7 +207,7 @@ func createHome(_ arguments: [String]) throws {
             preset: preset,
             policies: clonePolicies(from: arguments, base: .preset(preset)),
             sourceSelector: option(arguments, "--source") ?? "main",
-            homePath: option(arguments, "--path")
+            homePath: homePath
         )
     default:
         throw HomeportError.unsupportedCommand("create \(kind)")
