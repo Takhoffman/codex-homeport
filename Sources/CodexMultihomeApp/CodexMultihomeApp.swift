@@ -83,8 +83,12 @@ final class HomeportModel: ObservableObject {
         }
     }
 
+    var activeInstances: [LaunchedInstance] {
+        state.instances.filter { $0.status == .running }
+    }
+
     var recentInstances: [LaunchedInstance] {
-        Array(state.instances.prefix(6))
+        Array(state.instances.filter { $0.status != .running }.prefix(6))
     }
 
     init() {
@@ -1420,9 +1424,19 @@ struct RecentsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if !model.activeInstances.isEmpty {
+                SectionLabel("Open Now")
+                ForEach(model.activeInstances) { instance in
+                    RecentLaunchRow(instance: instance, isEditing: isEditing, showsStatus: true)
+                }
+            }
             SectionLabel("Recent Opens")
-            if model.recentInstances.isEmpty {
+            if model.recentInstances.isEmpty && model.activeInstances.isEmpty {
                 EmptyState(title: "No recents", subtitle: "Launch a home and it will appear here.")
+            } else if model.recentInstances.isEmpty {
+                Text("Closed launches will appear here after you open more homes.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             } else {
                 ForEach(model.recentInstances) { instance in
                     RecentLaunchRow(instance: instance, isEditing: isEditing)
@@ -2111,6 +2125,7 @@ struct RecentLaunchRow: View {
     @EnvironmentObject var model: HomeportModel
     var instance: LaunchedInstance
     var isEditing: Bool
+    var showsStatus: Bool = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -2129,6 +2144,14 @@ struct RecentLaunchRow: View {
                     .lineLimit(1)
             }
             Spacer()
+            if showsStatus {
+                Text("Open")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.green)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Color.green.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+            }
             LaunchActionPair { target in
                 model.launchRecent(instance, target: target)
             }
@@ -2727,34 +2750,57 @@ struct RecentConsoleSection: View {
     @EnvironmentObject var model: HomeportModel
 
     var body: some View {
-        if !model.recentInstances.isEmpty {
+        if !model.activeInstances.isEmpty || !model.recentInstances.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Recents")
+                Text("Instances")
                     .font(.title2.weight(.semibold))
                 VStack(spacing: 8) {
+                    ForEach(model.activeInstances) { instance in
+                        ConsoleInstanceRow(instance: instance, isActive: true)
+                    }
                     ForEach(model.recentInstances) { instance in
-                        HStack {
-                            Image(systemName: instance.target == .desktop ? "macwindow" : "terminal")
-                            VStack(alignment: .leading) {
-                                Text(instance.homeName)
-                                    .font(.headline)
-                                Text("\(instance.target.rawValue) • \(instance.workspacePath ?? "no workspace")")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            Button("Launch") {
-                                model.launchRecent(instance)
-                            }
-                        }
-                        .padding(10)
-                        .background(.background, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                        ConsoleInstanceRow(instance: instance, isActive: false)
                     }
                 }
             }
         }
+    }
+}
+
+struct ConsoleInstanceRow: View {
+    @EnvironmentObject var model: HomeportModel
+    var instance: LaunchedInstance
+    var isActive: Bool
+
+    var body: some View {
+        HStack {
+            Image(systemName: instance.target == .desktop ? "macwindow" : "terminal")
+            VStack(alignment: .leading) {
+                HStack(spacing: 6) {
+                    Text(instance.homeName)
+                        .font(.headline)
+                    if isActive {
+                        Text("Open")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.green)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.10), in: RoundedRectangle(cornerRadius: 5))
+                    }
+                }
+                Text("\(instance.target.rawValue) • \(instance.workspacePath ?? "no workspace")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Button("Launch") {
+                model.launchRecent(instance)
+            }
+        }
+        .padding(10)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
     }
 }
 
