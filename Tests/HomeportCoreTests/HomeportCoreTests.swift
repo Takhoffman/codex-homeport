@@ -522,6 +522,92 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: oldProfilePath))
     }
 
+    func testCreateCleanRoomCanUseCustomHomePath() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let customHome = root.appendingPathComponent("custom-homes/blank", isDirectory: true)
+
+        let home = try service.createCleanRoom(name: "Blank", homePath: customHome.path)
+
+        XCTAssertEqual(home.homePath, customHome.standardizedFileURL.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: customHome.path))
+        XCTAssertEqual(try service.loadState().homes.first(where: { $0.id == home.id })?.homePath, customHome.standardizedFileURL.path)
+    }
+
+    func testCloneCanUseCustomHomePath() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let mainConfig = root.appendingPathComponent(".codex/config.toml")
+        let customHome = root.appendingPathComponent("custom-homes/clone", isDirectory: true)
+        try FileManager.default.createDirectory(at: mainConfig.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "model = \"template\"".write(to: mainConfig, atomically: true, encoding: .utf8)
+
+        let home = try service.clone(
+            name: "Custom Clone",
+            preset: .configOnly,
+            policies: .configOnly,
+            sourceSelector: "main",
+            homePath: customHome.path
+        )
+
+        XCTAssertEqual(home.homePath, customHome.standardizedFileURL.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: customHome.appendingPathComponent("config.toml").path))
+    }
+
+    func testChangeHomePathCanMoveExistingHomeAndUpdateReferences() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let template = try service.createCleanRoom(name: "Template")
+        let clone = try service.clone(
+            name: "From Template",
+            preset: .configOnly,
+            options: .configOnly,
+            sourceSelector: template.slug,
+            materialization: .copy
+        )
+        var stateWithRecent = try service.loadState()
+        stateWithRecent.instances.append(LaunchedInstance(
+            homeID: template.id,
+            homeName: template.name,
+            homePath: template.homePath,
+            profilePath: template.profilePath,
+            target: .desktop,
+            pid: nil,
+            workspacePath: nil,
+            terminalApp: nil
+        ))
+        try service.saveState(stateWithRecent)
+        let oldPath = template.homePath
+        let newHome = root.appendingPathComponent("custom-homes/template", isDirectory: true)
+
+        try service.changeHomePath(id: template.id, homePath: newHome.path, moveExisting: true)
+
+        let state = try service.loadState()
+        let moved = try XCTUnwrap(state.homes.first(where: { $0.id == template.id }))
+        let updatedClone = try XCTUnwrap(state.homes.first(where: { $0.id == clone.id }))
+        let updatedRecent = try XCTUnwrap(state.instances.first(where: { $0.homeID == template.id }))
+        XCTAssertEqual(moved.homePath, newHome.standardizedFileURL.path)
+        XCTAssertEqual(updatedClone.sourceHomePath, newHome.standardizedFileURL.path)
+        XCTAssertEqual(updatedRecent.homePath, newHome.standardizedFileURL.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldPath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: newHome.path))
+    }
+
+    func testChangeHomePathCanAdoptExistingDirectoryWithoutMovingOldHome() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let home = try service.createCleanRoom(name: "Adoptable")
+        let oldPath = home.homePath
+        let existingHome = root.appendingPathComponent("existing-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: existingHome, withIntermediateDirectories: true)
+
+        try service.changeHomePath(id: home.id, homePath: existingHome.path)
+
+        let saved = try XCTUnwrap(try service.loadState().homes.first(where: { $0.id == home.id }))
+        XCTAssertEqual(saved.homePath, existingHome.standardizedFileURL.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: oldPath))
+    }
+
     func testPinningManagedHomePersists() throws {
         let root = try makeTempRoot()
         let service = HomeportService(paths: HomeportPaths(homeDirectory: root))

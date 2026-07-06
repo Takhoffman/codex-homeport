@@ -170,7 +170,7 @@ final class HomeportModel: ObservableObject {
     }
 
     @discardableResult
-    func cloneWorkingSetup() -> CodexHome? {
+    func cloneWorkingSetup(homePath: String? = nil) -> CodexHome? {
         do {
             let formatter = DateFormatter()
             formatter.dateFormat = "MMM d HH:mm"
@@ -178,7 +178,8 @@ final class HomeportModel: ObservableObject {
                 name: "Working Setup \(formatter.string(from: Date()))",
                 preset: state.preferences.defaultClonePreset,
                 policies: state.preferences.clonePolicies,
-                sourceSelector: state.preferences.cloneSourceSelector
+                sourceSelector: state.preferences.cloneSourceSelector,
+                homePath: normalizedOptionalPath(homePath)
             )
             refresh(statusMessage: "Created \(home.name): \(home.clonePolicies?.summary ?? state.preferences.clonePolicies.summary)")
             return home
@@ -189,7 +190,7 @@ final class HomeportModel: ObservableObject {
     }
 
     @discardableResult
-    func cloneConfigOnly() -> CodexHome? {
+    func cloneConfigOnly(homePath: String? = nil) -> CodexHome? {
         do {
             let formatter = DateFormatter()
             formatter.dateFormat = "MMM d HH:mm"
@@ -197,7 +198,8 @@ final class HomeportModel: ObservableObject {
                 name: "Config Copy \(formatter.string(from: Date()))",
                 preset: .configOnly,
                 policies: .configOnly,
-                sourceSelector: state.preferences.cloneSourceSelector
+                sourceSelector: state.preferences.cloneSourceSelector,
+                homePath: normalizedOptionalPath(homePath)
             )
             refresh(statusMessage: "Created \(home.name)")
             return home
@@ -208,9 +210,9 @@ final class HomeportModel: ObservableObject {
     }
 
     @discardableResult
-    func cleanRoom() -> CodexHome? {
+    func cleanRoom(homePath: String? = nil) -> CodexHome? {
         do {
-            let home = try service.createCleanRoom()
+            let home = try service.createCleanRoom(homePath: normalizedOptionalPath(homePath))
             refresh(statusMessage: "Created \(home.name)")
             return home
         } catch {
@@ -220,9 +222,9 @@ final class HomeportModel: ObservableObject {
     }
 
     @discardableResult
-    func createTemporaryHome() -> CodexHome? {
+    func createTemporaryHome(homePath: String? = nil) -> CodexHome? {
         do {
-            let home = try service.createTemporary()
+            let home = try service.createTemporary(homePath: normalizedOptionalPath(homePath))
             refresh(statusMessage: "Created \(home.name)")
             return home
         } catch {
@@ -236,6 +238,18 @@ final class HomeportModel: ObservableObject {
         do {
             try service.renameHome(id: home.id, name: name, moveFolders: moveFolders)
             refresh(statusMessage: "Renamed to \(name.trimmingCharacters(in: .whitespacesAndNewlines))")
+            return true
+        } catch {
+            status = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    func changeHomePath(_ home: CodexHome, homePath: String, moveExisting: Bool = false) -> Bool {
+        do {
+            try service.changeHomePath(id: home.id, homePath: homePath, moveExisting: moveExisting)
+            refresh(statusMessage: "Updated path for \(home.name)")
             return true
         } catch {
             status = error.localizedDescription
@@ -533,6 +547,14 @@ final class HomeportModel: ObservableObject {
         selector == "preferred" ? (state.preferences.launchTemporaryByDefault ? "temp" : "main") : selector
     }
 
+    private func normalizedOptionalPath(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private func clonePreset(for options: CloneOptions) -> ClonePreset {
         if options == .empty {
             return .empty
@@ -643,9 +665,12 @@ struct HomeportMenuView: View {
     @State private var detailReturnTab: MenuTab = .favorites
     @State private var isEditingDetail = false
     @State private var editedName = ""
+    @State private var editedHomePath = ""
     @State private var moveFoldersOnRename = false
+    @State private var moveHomePathOnEdit = false
     @State private var newHomeMode: NewHomeMode = .clone
     @State private var newHomeLaunchTarget: LaunchTarget = .desktop
+    @State private var newHomePath = ""
     @State private var showsAddFavoriteSheet = false
     @State private var pendingDeleteHome: CodexHome?
 
@@ -699,7 +724,9 @@ struct HomeportMenuView: View {
                                 home: focusedHome,
                                 isEditing: isEditingDetail,
                                 editedName: $editedName,
+                                editedHomePath: $editedHomePath,
                                 moveFoldersOnRename: $moveFoldersOnRename,
+                                moveHomePathOnEdit: $moveHomePathOnEdit,
                                 launch: { target in model.launch(focusedHome.slug, target: target) },
                                 setPinned: { pinned in
                                     model.setHomePinned(focusedHome, pinned: pinned)
@@ -745,7 +772,9 @@ struct HomeportMenuView: View {
         }
         .onChange(of: focusedHome?.id) { _ in
             editedName = focusedHome?.name ?? ""
+            editedHomePath = focusedHome?.homePath ?? ""
             moveFoldersOnRename = false
+            moveHomePathOnEdit = false
         }
         .sheet(isPresented: $showsAddFavoriteSheet) {
             AddFavoriteSheet()
@@ -777,6 +806,7 @@ struct HomeportMenuView: View {
             NewHomeTab(
                 mode: $newHomeMode,
                 launchTarget: $newHomeLaunchTarget,
+                customPath: $newHomePath,
                 create: createNewHome
             )
         case .settings:
@@ -831,13 +861,17 @@ struct HomeportMenuView: View {
             return
         }
         editedName = focusedHome?.name ?? ""
+        editedHomePath = focusedHome?.homePath ?? ""
         moveFoldersOnRename = false
+        moveHomePathOnEdit = false
         isEditingDetail = true
     }
 
     private func cancelDetailEdit() {
         editedName = focusedHome?.name ?? ""
+        editedHomePath = focusedHome?.homePath ?? ""
         moveFoldersOnRename = false
+        moveHomePathOnEdit = false
         isEditingDetail = false
     }
 
@@ -851,18 +885,31 @@ struct HomeportMenuView: View {
             model.status = "Home name cannot be empty."
             return
         }
-        let hasChanges = trimmedName != focusedHome.name || moveFoldersOnRename
+        let trimmedPath = editedHomePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else {
+            model.status = "Home path cannot be empty."
+            return
+        }
+        let pathChanged = trimmedPath != focusedHome.homePath
+        let nameChanged = trimmedName != focusedHome.name || moveFoldersOnRename
+        let hasChanges = nameChanged || pathChanged
         guard hasChanges else {
             isEditingDetail = false
             return
         }
-        guard model.renameHome(focusedHome, name: trimmedName, moveFolders: moveFoldersOnRename) else {
+        if nameChanged, !model.renameHome(focusedHome, name: trimmedName, moveFolders: moveFoldersOnRename) {
             return
         }
-        let refreshedHome = model.state.homes.first { $0.id == focusedHome.id } ?? focusedHome
+        var refreshedHome = model.state.homes.first { $0.id == focusedHome.id } ?? focusedHome
+        if pathChanged, !model.changeHomePath(refreshedHome, homePath: trimmedPath, moveExisting: moveHomePathOnEdit) {
+            return
+        }
+        refreshedHome = model.state.homes.first { $0.id == focusedHome.id } ?? refreshedHome
         self.focusedHome = refreshedHome
         editedName = refreshedHome.name
+        editedHomePath = refreshedHome.homePath
         moveFoldersOnRename = false
+        moveHomePathOnEdit = false
         isEditingDetail = false
     }
 
@@ -870,7 +917,9 @@ struct HomeportMenuView: View {
         detailReturnTab = selectedTab
         focusedHome = home
         editedName = home.name
+        editedHomePath = home.homePath
         moveFoldersOnRename = false
+        moveHomePathOnEdit = false
         isEditingList = false
         isEditingDetail = false
     }
@@ -879,13 +928,13 @@ struct HomeportMenuView: View {
         let createdHome: CodexHome?
         switch newHomeMode {
         case .clone:
-            createdHome = model.cloneWorkingSetup()
+            createdHome = model.cloneWorkingSetup(homePath: newHomePath)
         case .cleanRoom:
-            createdHome = model.cleanRoom()
+            createdHome = model.cleanRoom(homePath: newHomePath)
         case .temporary:
-            createdHome = model.createTemporaryHome()
+            createdHome = model.createTemporaryHome(homePath: newHomePath)
         case .configOnly:
-            createdHome = model.cloneConfigOnly()
+            createdHome = model.cloneConfigOnly(homePath: newHomePath)
         }
         guard let createdHome else {
             return
@@ -897,7 +946,10 @@ struct HomeportMenuView: View {
         selectedTab = .homes
         focusedHome = refreshedHome
         editedName = refreshedHome.name
+        editedHomePath = refreshedHome.homePath
         moveFoldersOnRename = false
+        moveHomePathOnEdit = false
+        newHomePath = ""
         isEditingList = false
         isEditingDetail = false
         model.status = didLaunch
@@ -1378,6 +1430,7 @@ struct NewHomeTab: View {
     @EnvironmentObject var model: HomeportModel
     @Binding var mode: NewHomeMode
     @Binding var launchTarget: LaunchTarget
+    @Binding var customPath: String
     var create: () -> Void
 
     var body: some View {
@@ -1405,6 +1458,9 @@ struct NewHomeTab: View {
                 Text("Terminal").tag(LaunchTarget.terminal)
             }
             .pickerStyle(.segmented)
+            SectionLabel("Path")
+            TextField("Optional CODEX_HOME path", text: $customPath)
+                .textFieldStyle(.roundedBorder)
             if mode.showsCloneOptions {
                 SectionLabel("Clone Source")
                 CloneSourceControls()
@@ -1596,7 +1652,9 @@ struct FocusedHomeView: View {
     var home: CodexHome
     var isEditing: Bool
     @Binding var editedName: String
+    @Binding var editedHomePath: String
     @Binding var moveFoldersOnRename: Bool
+    @Binding var moveHomePathOnEdit: Bool
     var launch: (LaunchTarget) -> Void
     var setPinned: (Bool) -> Void
     var delete: () -> Void
@@ -1616,7 +1674,11 @@ struct FocusedHomeView: View {
 
             SectionLabel("Home")
             VStack(spacing: 6) {
-                DetailInfoRow(symbol: "folder", title: "Path", subtitle: home.homePath)
+                if isEditing && home.kind != .main {
+                    EditableDetailInfoRow(symbol: "folder", title: "Path", text: $editedHomePath)
+                } else {
+                    DetailInfoRow(symbol: "folder", title: "Path", subtitle: home.homePath)
+                }
                 DetailInfoRow(symbol: "key.fill", title: "Auth", subtitle: model.authSummary(for: home))
                 DetailInfoRow(symbol: "arrow.triangle.branch", title: "Clone Source", subtitle: home.sourceHomePath ?? (home.kind == .main ? "This is your main Codex home" : "No inherited files"))
                 if let policies = home.clonePolicies {
@@ -1636,6 +1698,7 @@ struct FocusedHomeView: View {
                 isEditing: isEditing,
                 isPinned: model.isPinned(home),
                 moveFoldersOnRename: $moveFoldersOnRename,
+                moveHomePathOnEdit: $moveHomePathOnEdit,
                 setPinned: setPinned,
                 delete: delete
             )
@@ -1751,11 +1814,39 @@ struct DetailInfoRow: View {
     }
 }
 
+struct EditableDetailInfoRow: View {
+    var symbol: String
+    var title: String
+    @Binding var text: String
+    var tint: Color = .secondary
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(width: 22, height: 22)
+                .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                TextField(title, text: $text)
+                    .font(.caption)
+                    .textFieldStyle(.roundedBorder)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
 struct HomeManagePanel: View {
     var home: CodexHome
     var isEditing: Bool
     var isPinned: Bool
     @Binding var moveFoldersOnRename: Bool
+    @Binding var moveHomePathOnEdit: Bool
     var setPinned: (Bool) -> Void
     var delete: () -> Void
 
@@ -1792,6 +1883,17 @@ struct HomeManagePanel: View {
                         Text("Move folders to match name")
                             .font(.caption.weight(.semibold))
                         Text("Renames the managed home and app profile folders.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .toggleStyle(.switch)
+                Toggle(isOn: $moveHomePathOnEdit) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Move existing home to path")
+                            .font(.caption.weight(.semibold))
+                        Text("Off means the new path must already contain a Codex home.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
@@ -2416,7 +2518,9 @@ struct HomeGrid: View {
 struct HomeCard: View {
     @EnvironmentObject var model: HomeportModel
     @State private var editedName: String = ""
+    @State private var editedPath: String = ""
     @State private var moveFoldersOnRename = false
+    @State private var moveHomePathOnSave = false
 
     var home: CodexHome
 
@@ -2444,12 +2548,16 @@ struct HomeCard: View {
                     TextField("Name", text: $editedName)
                         .textFieldStyle(.roundedBorder)
                     Button("Save") {
-                        model.renameHome(home, name: editedName, moveFolders: moveFoldersOnRename)
+                        saveEdits()
                         moveFoldersOnRename = false
+                        moveHomePathOnSave = false
                     }
                     .disabled(saveDisabled)
                 }
                 Toggle("Move folders to match name", isOn: $moveFoldersOnRename)
+                TextField("CODEX_HOME path", text: $editedPath)
+                    .textFieldStyle(.roundedBorder)
+                Toggle("Move existing home to path", isOn: $moveHomePathOnSave)
             }
 
             Text(home.homePath)
@@ -2479,17 +2587,35 @@ struct HomeCard: View {
         )
         .onAppear {
             editedName = home.name
+            editedPath = home.homePath
             moveFoldersOnRename = false
+            moveHomePathOnSave = false
         }
         .onChange(of: home.name) { newName in
             editedName = newName
+            editedPath = home.homePath
             moveFoldersOnRename = false
+            moveHomePathOnSave = false
         }
     }
 
     private var saveDisabled: Bool {
-        editedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || (editedName == home.name && !moveFoldersOnRename)
+        let trimmedPath = editedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        return editedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || trimmedPath.isEmpty
+            || (editedName == home.name && !moveFoldersOnRename && trimmedPath == home.homePath)
+    }
+
+    private func saveEdits() {
+        let trimmedPath = editedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nameChanged = editedName != home.name || moveFoldersOnRename
+        if nameChanged {
+            model.renameHome(home, name: editedName, moveFolders: moveFoldersOnRename)
+        }
+        let refreshedHome = model.state.homes.first { $0.id == home.id } ?? home
+        if trimmedPath != home.homePath {
+            model.changeHomePath(refreshedHome, homePath: trimmedPath, moveExisting: moveHomePathOnSave)
+        }
     }
 
     private func icon(for home: CodexHome) -> String {

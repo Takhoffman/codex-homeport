@@ -46,6 +46,8 @@ func run(_ arguments: [String]) throws {
         try createHome(Array(arguments.dropFirst()))
     case "rename":
         try renameHome(Array(arguments.dropFirst()))
+    case "path":
+        try changeHomePath(Array(arguments.dropFirst()))
     case "delete":
         try deleteHome(Array(arguments.dropFirst()))
     case "list":
@@ -163,7 +165,8 @@ func clone(_ arguments: [String]) throws {
         name: name,
         preset: preset,
         policies: clonePolicies,
-        sourceSelector: sourceSelector
+        sourceSelector: sourceSelector,
+        homePath: option(arguments, "--path")
     )
     printCreatedHome(home)
 }
@@ -188,16 +191,17 @@ func createHome(_ arguments: [String]) throws {
     let home: CodexHome
     switch kind {
     case "clean-room", "cleanRoom":
-        home = try service.createCleanRoom(name: name)
+        home = try service.createCleanRoom(name: name, homePath: option(arguments, "--path"))
     case "temporary", "temp":
-        home = try service.createTemporary(name: name)
+        home = try service.createTemporary(name: name, homePath: option(arguments, "--path"))
     case "clone":
         let preset = option(arguments, "--preset").flatMap(ClonePreset.init(rawValue:)) ?? .workingSetup
         home = try service.clone(
             name: name ?? "Multihome Clone",
             preset: preset,
             policies: clonePolicies(from: arguments, base: .preset(preset)),
-            sourceSelector: option(arguments, "--source") ?? "main"
+            sourceSelector: option(arguments, "--source") ?? "main",
+            homePath: option(arguments, "--path")
         )
     default:
         throw HomeportError.unsupportedCommand("create \(kind)")
@@ -217,6 +221,20 @@ func renameHome(_ arguments: [String]) throws {
     let moveFolders = arguments.contains("--move-folders")
     try service.renameHome(id: home.id, name: name, moveFolders: moveFolders)
     print("Renamed \(selector) to \(name)\(moveFolders ? " and moved managed folders" : "").")
+}
+
+func changeHomePath(_ arguments: [String]) throws {
+    guard let selector = arguments.first, let path = option(arguments, "--path") else {
+        printHelp(topic: "path")
+        return
+    }
+    let state = try service.loadState()
+    guard let home = state.homes.first(where: { $0.slug == selector || $0.name == selector }) else {
+        throw HomeportError.homeDoesNotExist(selector)
+    }
+    let moveExisting = arguments.contains("--move") || arguments.contains("--move-existing")
+    try service.changeHomePath(id: home.id, homePath: path, moveExisting: moveExisting)
+    print("Updated \(selector) home path to \(path)\(moveExisting ? " and moved existing files" : "").")
 }
 
 func deleteHome(_ arguments: [String]) throws {
@@ -814,6 +832,7 @@ func positionalName(in arguments: [String]) -> String? {
         "--exclude",
         "--link",
         "--name",
+        "--path",
         "--source"
     ]
     var skipNext = false
@@ -997,6 +1016,7 @@ func printHelp(topic: String? = nil) {
     case "clone": print(cloneHelp())
     case "create": print(createHelp())
     case "rename": print(renameHelp())
+    case "path": print(pathHelp())
     case "delete": print(deleteHelp())
     case "list": print(listHelp())
     case "review": print(reviewHelp())
@@ -1052,6 +1072,7 @@ Home commands:
   clone        Create a managed Codex home from ~/.codex
   create       Create a clean-room, temporary, or cloned home
   rename       Rename a managed home
+  path         Change a managed home's CODEX_HOME path
   delete       Move a managed home/profile to Trash
   cleanup      Move a temporary home/profile to Trash after review
   promote      Keep a temporary home as a saved managed home
@@ -1064,6 +1085,7 @@ Examples:
   homeport throwaway
   homeport create --kind clean-room --name "Blank Slate"
   homeport rename blank-slate --name "Scratch Lab"
+  homeport path scratch-lab --path ~/codex-homes/scratch-lab --move
   homeport delete scratch-lab
   homeport clone --preset working-setup --name "Plugin Lab"
   homeport review
@@ -1148,10 +1170,11 @@ Examples:
 func cloneHelp() -> String { """
 homeport clone
 
-Create a named managed Codex home under ~/.codex-homes.
+Create a named managed Codex home. By default homes live under ~/.codex-homes;
+pass --path to choose a different CODEX_HOME destination.
 
 Usage:
-  homeport clone --preset working-setup|config-only|everything|empty --name NAME [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
+  homeport clone --preset working-setup|config-only|everything|empty --name NAME [--path PATH] [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
 
 Presets:
   working-setup   Config, auth, skills, plugins, MCP-related files; no sessions/logs.
@@ -1161,6 +1184,7 @@ Presets:
 
 Examples:
   homeport clone --preset working-setup --name "Plugin Lab"
+  homeport clone --preset working-setup --name "Plugin Lab" --path ~/codex-homes/plugin-lab
   homeport clone --preset config-only --name "No Auth Test"
   homeport clone --preset empty --name "Blank Slate"
   homeport clone --name "Skills Only" --include skills,plugins --exclude auth,memories,browser
@@ -1186,10 +1210,11 @@ homeport create
 Create a managed Codex home.
 
 Usage:
-  homeport create --kind clean-room|temporary|clone [--name NAME] [--preset PRESET] [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
+  homeport create --kind clean-room|temporary|clone [--name NAME] [--path PATH] [--preset PRESET] [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
 
 Examples:
   homeport create --kind clean-room --name "Blank Slate"
+  homeport create --kind clean-room --name "Blank Slate" --path ~/codex-homes/blank-slate
   homeport create --kind temporary --name "Throwaway UI"
   homeport create --kind clone --preset config-only --name "Config Lab"
   homeport create --kind clone --preset working-setup --name "Shared Auth" --link-auth
@@ -1208,6 +1233,21 @@ Usage:
 Examples:
   homeport rename config-lab --name "Config Lab 2"
   homeport rename old-lab --name "New Lab" --move-folders
+""" }
+
+func pathHelp() -> String { """
+homeport path
+
+Change a saved home's CODEX_HOME path. The main ~/.codex home cannot be changed.
+By default, the new path must already be an existing directory. Pass --move to
+move the current home folder to a new path.
+
+Usage:
+  homeport path SLUG --path PATH [--move]
+
+Examples:
+  homeport path config-lab --path ~/codex-homes/config-lab
+  homeport path config-lab --path ~/codex-homes/config-lab-2 --move
 """ }
 
 func deleteHelp() -> String { """

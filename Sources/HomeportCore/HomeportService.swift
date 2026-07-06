@@ -37,14 +37,28 @@ public final class HomeportService: @unchecked Sendable {
         try store.save(state)
     }
 
-    public func createCleanRoom(name: String? = nil) throws -> CodexHome {
+    public func createCleanRoom(name: String? = nil, homePath: String? = nil) throws -> CodexHome {
         let slug = uniqueSlug(base: slugify(name ?? timestampSlug(prefix: "clean-room")))
-        return try createManagedHome(name: name ?? "Clean Room", slug: slug, kind: .cleanRoom, preset: .empty, temporary: false)
+        return try createManagedHome(
+            name: name ?? "Clean Room",
+            slug: slug,
+            kind: .cleanRoom,
+            preset: .empty,
+            destinationHomeURL: try homePath.map(normalizedHomeURL),
+            temporary: false
+        )
     }
 
-    public func createTemporary(name: String? = nil) throws -> CodexHome {
+    public func createTemporary(name: String? = nil, homePath: String? = nil) throws -> CodexHome {
         let slug = uniqueSlug(base: slugify(name ?? timestampSlug(prefix: "temp")))
-        return try createManagedHome(name: name ?? "Temporary", slug: slug, kind: .temporary, preset: .empty, temporary: true)
+        return try createManagedHome(
+            name: name ?? "Temporary",
+            slug: slug,
+            kind: .temporary,
+            preset: .empty,
+            destinationHomeURL: try homePath.map(normalizedHomeURL),
+            temporary: true
+        )
     }
 
     public func clone(name: String, preset: ClonePreset) throws -> CodexHome {
@@ -74,7 +88,8 @@ public final class HomeportService: @unchecked Sendable {
         name: String,
         preset: ClonePreset,
         policies: ClonePolicies,
-        sourceSelector: String
+        sourceSelector: String,
+        homePath: String? = nil
     ) throws -> CodexHome {
         let slug = uniqueSlug(base: slugify(name))
         let sourceURL = preset == .empty ? nil : try cloneSourceURL(selector: sourceSelector)
@@ -85,6 +100,7 @@ public final class HomeportService: @unchecked Sendable {
             preset: preset,
             policies: policies,
             sourceURL: sourceURL,
+            destinationHomeURL: try homePath.map(normalizedHomeURL),
             temporary: false
         )
     }
@@ -132,6 +148,53 @@ public final class HomeportService: @unchecked Sendable {
         state.homes[index].slug = newSlug
         for instanceIndex in state.instances.indices where state.instances[instanceIndex].homeID == id {
             state.instances[instanceIndex].homeName = trimmedName
+        }
+        try store.save(state)
+    }
+
+    public func changeHomePath(id: UUID, homePath: String, moveExisting: Bool = false) throws {
+        var state = try store.load()
+        guard let index = state.homes.firstIndex(where: { $0.id == id }) else {
+            throw HomeportError.homeDoesNotExist(id.uuidString)
+        }
+        guard state.homes[index].kind != .main else {
+            throw HomeportError.commandFailed("The main ~/.codex home path cannot be changed.")
+        }
+
+        let oldHomeURL = URL(fileURLWithPath: state.homes[index].homePath, isDirectory: true).standardizedFileURL
+        let newHomeURL = try normalizedHomeURL(homePath)
+        guard oldHomeURL.path != newHomeURL.path else {
+            return
+        }
+        if state.homes.enumerated().contains(where: { item in
+            item.offset != index
+                && URL(fileURLWithPath: item.element.homePath, isDirectory: true).standardizedFileURL.path == newHomeURL.path
+        }) {
+            throw HomeportError.homeAlreadyExists(newHomeURL.path)
+        }
+
+        if moveExisting {
+            guard fileManager.fileExists(atPath: oldHomeURL.path) else {
+                throw HomeportError.homeDoesNotExist(oldHomeURL.path)
+            }
+            guard !fileManager.fileExists(atPath: newHomeURL.path) else {
+                throw HomeportError.homeAlreadyExists(newHomeURL.path)
+            }
+            try fileManager.createDirectory(at: newHomeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fileManager.moveItem(at: oldHomeURL, to: newHomeURL)
+        } else {
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: newHomeURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+                throw HomeportError.homeDoesNotExist(newHomeURL.path)
+            }
+        }
+
+        state.homes[index].homePath = newHomeURL.path
+        for sourceIndex in state.homes.indices where state.homes[sourceIndex].sourceHomePath == oldHomeURL.path {
+            state.homes[sourceIndex].sourceHomePath = newHomeURL.path
+        }
+        for instanceIndex in state.instances.indices where state.instances[instanceIndex].homeID == id {
+            state.instances[instanceIndex].homePath = newHomeURL.path
         }
         try store.save(state)
     }
@@ -355,13 +418,14 @@ public final class HomeportService: @unchecked Sendable {
         options: CloneOptions? = nil,
         policies explicitPolicies: ClonePolicies? = nil,
         sourceURL explicitSourceURL: URL? = nil,
+        destinationHomeURL: URL? = nil,
         materialization: CloneMaterialization = .copy,
         temporary: Bool
     ) throws -> CodexHome {
         try fileManager.createDirectory(at: paths.managedHomesDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: paths.profilesDirectory, withIntermediateDirectories: true)
 
-        let homeURL = paths.managedHomesDirectory.appendingPathComponent(slug, isDirectory: true)
+        let homeURL = destinationHomeURL ?? paths.managedHomesDirectory.appendingPathComponent(slug, isDirectory: true)
         let profileURL = paths.profilesDirectory.appendingPathComponent(slug, isDirectory: true)
         let sourceURL = preset == .empty ? nil : explicitSourceURL ?? paths.mainCodexHome
         let policies = explicitPolicies ?? ClonePolicies(options: options ?? .preset(preset), materialization: materialization)
@@ -395,6 +459,22 @@ public final class HomeportService: @unchecked Sendable {
             try? fileManager.removeItem(at: profileURL)
             throw error
         }
+    }
+
+    private func normalizedHomeURL(_ path: String) throws -> URL {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else {
+            throw HomeportError.commandFailed("Home path cannot be empty.")
+        }
+        let expandedPath: String
+        if trimmedPath == "~" {
+            expandedPath = NSHomeDirectory()
+        } else if trimmedPath.hasPrefix("~/") {
+            expandedPath = NSHomeDirectory() + String(trimmedPath.dropFirst())
+        } else {
+            expandedPath = trimmedPath
+        }
+        return URL(fileURLWithPath: expandedPath, isDirectory: true).standardizedFileURL
     }
 
     private func moveManagedHomeFolders(
