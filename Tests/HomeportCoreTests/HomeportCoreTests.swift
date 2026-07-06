@@ -762,6 +762,53 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: paths.legacyAppSupportDirectory.path))
     }
 
+    func testLoadMergesLegacyHomeportStateWhenCurrentStateAlreadyExists() throws {
+        let root = try makeTempRoot()
+        let paths = HomeportPaths(homeDirectory: root)
+        let currentHome = CodexHome(
+            name: "Current Home",
+            slug: "current-home",
+            kind: .clone,
+            homePath: root.appendingPathComponent(".codex-homes/current-home").path,
+            profilePath: paths.profilesDirectory.appendingPathComponent("current-home").path
+        )
+        let legacyHome = CodexHome(
+            name: "Legacy Home",
+            slug: "legacy-home",
+            kind: .clone,
+            homePath: root.appendingPathComponent(".codex-homes/legacy-home").path,
+            profilePath: paths.legacyAppSupportDirectory.appendingPathComponent("Profiles/legacy-home").path
+        )
+        let legacyInstance = LaunchedInstance(
+            homeID: legacyHome.id,
+            homeName: legacyHome.name,
+            homePath: legacyHome.homePath,
+            profilePath: legacyHome.profilePath,
+            target: .desktop,
+            pid: nil,
+            workspacePath: "/",
+            terminalApp: nil
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try FileManager.default.createDirectory(at: paths.appSupportDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: paths.legacyAppSupportDirectory, withIntermediateDirectories: true)
+        try encoder.encode(HomeportState(homes: [currentHome])).write(to: paths.stateFile)
+        try encoder.encode(HomeportState(
+            homes: [legacyHome],
+            instances: [legacyInstance],
+            pinnedHomeIDs: [legacyHome.id]
+        )).write(to: paths.legacyStateFile)
+
+        let state = try HomeportService(paths: paths).loadState()
+
+        XCTAssertNotNil(state.homes.first(where: { $0.id == currentHome.id }))
+        XCTAssertNotNil(state.homes.first(where: { $0.id == legacyHome.id }))
+        XCTAssertNotNil(state.instances.first(where: { $0.id == legacyInstance.id }))
+        XCTAssertTrue(state.pinnedHomeIDs.contains(legacyHome.id))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: paths.legacyStateFile.path))
+    }
+
     func testChannelReadsEnvironmentBeforeBundleDefault() {
         XCTAssertEqual(HomeportChannel.current(environment: ["HOMEPORT_CHANNEL": "dev"], bundle: .main), .dev)
         XCTAssertEqual(HomeportChannel.current(environment: ["HOMEPORT_CHANNEL": "live"], bundle: .main), .live)
