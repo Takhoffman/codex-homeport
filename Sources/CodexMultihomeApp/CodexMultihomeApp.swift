@@ -170,12 +170,12 @@ final class HomeportModel: ObservableObject {
     }
 
     @discardableResult
-    func cloneWorkingSetup(homePath: String? = nil) -> CodexHome? {
+    func cloneWorkingSetup(name: String? = nil, homePath: String? = nil) -> CodexHome? {
         do {
             let formatter = DateFormatter()
             formatter.dateFormat = "MMM d HH:mm"
             let home = try service.clone(
-                name: "Working Setup \(formatter.string(from: Date()))",
+                name: name ?? "Working Setup \(formatter.string(from: Date()))",
                 preset: state.preferences.defaultClonePreset,
                 policies: state.preferences.clonePolicies,
                 sourceSelector: state.preferences.cloneSourceSelector,
@@ -190,12 +190,12 @@ final class HomeportModel: ObservableObject {
     }
 
     @discardableResult
-    func cloneConfigOnly(homePath: String? = nil) -> CodexHome? {
+    func cloneConfigOnly(name: String? = nil, homePath: String? = nil) -> CodexHome? {
         do {
             let formatter = DateFormatter()
             formatter.dateFormat = "MMM d HH:mm"
             let home = try service.clone(
-                name: "Config Copy \(formatter.string(from: Date()))",
+                name: name ?? "Config Copy \(formatter.string(from: Date()))",
                 preset: .configOnly,
                 policies: .configOnly,
                 sourceSelector: state.preferences.cloneSourceSelector,
@@ -210,9 +210,9 @@ final class HomeportModel: ObservableObject {
     }
 
     @discardableResult
-    func cleanRoom(homePath: String? = nil) -> CodexHome? {
+    func cleanRoom(name: String? = nil, homePath: String? = nil) -> CodexHome? {
         do {
-            let home = try service.createCleanRoom(homePath: normalizedOptionalPath(homePath))
+            let home = try service.createCleanRoom(name: name, homePath: normalizedOptionalPath(homePath))
             refresh(statusMessage: "Created \(home.name)")
             return home
         } catch {
@@ -222,9 +222,9 @@ final class HomeportModel: ObservableObject {
     }
 
     @discardableResult
-    func createTemporaryHome(homePath: String? = nil) -> CodexHome? {
+    func createTemporaryHome(name: String? = nil, homePath: String? = nil) -> CodexHome? {
         do {
-            let home = try service.createTemporary(homePath: normalizedOptionalPath(homePath))
+            let home = try service.createTemporary(name: name, homePath: normalizedOptionalPath(homePath))
             refresh(statusMessage: "Created \(home.name)")
             return home
         } catch {
@@ -671,6 +671,7 @@ struct HomeportMenuView: View {
     @State private var newHomeMode: NewHomeMode = .clone
     @State private var newHomeLaunchTarget: LaunchTarget = .desktop
     @State private var newHomePath = ""
+    @State private var newHomePathEdited = false
     @State private var showsAddFavoriteSheet = false
     @State private var pendingDeleteHome: CodexHome?
 
@@ -807,6 +808,8 @@ struct HomeportMenuView: View {
                 mode: $newHomeMode,
                 launchTarget: $newHomeLaunchTarget,
                 customPath: $newHomePath,
+                customPathEdited: $newHomePathEdited,
+                suggestedPath: suggestedNewHomePath(for: newHomeMode),
                 create: createNewHome
             )
         case .settings:
@@ -925,16 +928,17 @@ struct HomeportMenuView: View {
     }
 
     private func createNewHome() {
+        let suggestedName = suggestedNewHomeName(for: newHomeMode)
         let createdHome: CodexHome?
         switch newHomeMode {
         case .clone:
-            createdHome = model.cloneWorkingSetup(homePath: newHomePath)
+            createdHome = model.cloneWorkingSetup(name: suggestedName, homePath: newHomePath)
         case .cleanRoom:
-            createdHome = model.cleanRoom(homePath: newHomePath)
+            createdHome = model.cleanRoom(name: suggestedName, homePath: newHomePath)
         case .temporary:
-            createdHome = model.createTemporaryHome(homePath: newHomePath)
+            createdHome = model.createTemporaryHome(name: suggestedName, homePath: newHomePath)
         case .configOnly:
-            createdHome = model.cloneConfigOnly(homePath: newHomePath)
+            createdHome = model.cloneConfigOnly(name: suggestedName, homePath: newHomePath)
         }
         guard let createdHome else {
             return
@@ -950,11 +954,46 @@ struct HomeportMenuView: View {
         moveFoldersOnRename = false
         moveHomePathOnEdit = false
         newHomePath = ""
+        newHomePathEdited = false
         isEditingList = false
         isEditingDetail = false
         model.status = didLaunch
             ? "Created and opened \(refreshedHome.name)"
             : "Created \(refreshedHome.name), but open failed: \(launchFailure)"
+    }
+
+    private func suggestedNewHomeName(for mode: NewHomeMode) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d HH:mm"
+        switch mode {
+        case .clone:
+            return "Working Setup \(formatter.string(from: Date()))"
+        case .cleanRoom:
+            return "Clean Room"
+        case .temporary:
+            return "Temporary"
+        case .configOnly:
+            return "Config Copy \(formatter.string(from: Date()))"
+        }
+    }
+
+    private func suggestedNewHomePath(for mode: NewHomeMode) -> String {
+        let slug = uniqueNewHomeSlug(base: slugify(suggestedNewHomeName(for: mode)))
+        return model.service.paths.managedHomesDirectory
+            .appendingPathComponent(slug, isDirectory: true)
+            .path
+    }
+
+    private func uniqueNewHomeSlug(base: String) -> String {
+        let existing = Set(model.state.homes.map(\.slug))
+        guard existing.contains(base) else {
+            return base
+        }
+        var index = 2
+        while existing.contains("\(base)-\(index)") {
+            index += 1
+        }
+        return "\(base)-\(index)"
     }
 
     private func requestDelete(_ home: CodexHome) {
@@ -1431,6 +1470,8 @@ struct NewHomeTab: View {
     @Binding var mode: NewHomeMode
     @Binding var launchTarget: LaunchTarget
     @Binding var customPath: String
+    @Binding var customPathEdited: Bool
+    var suggestedPath: String
     var create: () -> Void
 
     var body: some View {
@@ -1459,7 +1500,13 @@ struct NewHomeTab: View {
             }
             .pickerStyle(.segmented)
             SectionLabel("Path")
-            TextField("Optional CODEX_HOME path", text: $customPath)
+            TextField("CODEX_HOME path", text: Binding(
+                get: { customPath.isEmpty && !customPathEdited ? suggestedPath : customPath },
+                set: { value in
+                    customPath = value
+                    customPathEdited = true
+                }
+            ))
                 .textFieldStyle(.roundedBorder)
             if mode.showsCloneOptions {
                 SectionLabel("Clone Source")
@@ -1481,6 +1528,17 @@ struct NewHomeTab: View {
             }
             .padding(12)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .onAppear {
+            if customPath.isEmpty {
+                customPath = suggestedPath
+                customPathEdited = false
+            }
+        }
+        .onChange(of: suggestedPath) { nextPath in
+            if !customPathEdited {
+                customPath = nextPath
+            }
         }
     }
 }
