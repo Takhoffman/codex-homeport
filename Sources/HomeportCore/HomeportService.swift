@@ -215,6 +215,15 @@ public final class HomeportService: @unchecked Sendable {
         try store.save(state)
     }
 
+    public func setModelRouting(id: UUID, routing: ModelRoutingConfig?) throws {
+        var state = try store.load()
+        guard let index = state.homes.firstIndex(where: { $0.id == id }) else {
+            throw HomeportError.homeDoesNotExist(id.uuidString)
+        }
+        state.homes[index].modelRouting = routing
+        try store.save(state)
+    }
+
     public func deleteHome(id: UUID) throws -> [URL] {
         var state = try store.load()
         guard let index = state.homes.firstIndex(where: { $0.id == id }) else {
@@ -240,7 +249,8 @@ public final class HomeportService: @unchecked Sendable {
         selector: String,
         target: LaunchTarget,
         workspace: String? = nil,
-        terminal: TerminalApp? = nil
+        terminal: TerminalApp? = nil,
+        appBundle: URL? = nil
     ) throws -> LaunchedInstance {
         var state = try store.load()
         reconcileInstances(in: &state)
@@ -252,12 +262,15 @@ public final class HomeportService: @unchecked Sendable {
             home = try resolveHome(selector: selector, in: state)
         }
         let selectedTerminal = terminal ?? state.preferredTerminal
-        let pid = try launcher.launch(home: home, target: target, workspace: workspace, terminal: selectedTerminal)
+        let pid = try launcher.launch(home: home, target: target, workspace: workspace, terminal: selectedTerminal, appBundle: appBundle)
+        let launchedProfilePath = target == .desktop && appBundle != nil
+            ? home.profilePath.map { "\($0)-shim" }
+            : home.profilePath
         let instance = LaunchedInstance(
             homeID: home.id,
             homeName: home.name,
             homePath: home.homePath,
-            profilePath: home.profilePath,
+            profilePath: launchedProfilePath,
             target: target,
             pid: pid,
             workspacePath: workspace,

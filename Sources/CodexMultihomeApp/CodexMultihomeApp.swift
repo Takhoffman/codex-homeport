@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import HomeportCore
 
@@ -61,6 +62,11 @@ final class HomeportModel: ObservableObject {
     @Published var workspacePath = FileManager.default.currentDirectoryPath
     @Published var isCheckingForUpdates = false
     @Published var isInstallingUpdate = false
+    @Published var isRunningShimCommand = false
+    private var shimOperationCount = 0
+    @Published var shimStatus = "Ready"
+    @Published var shimProviderStatuses: [ShimLoginProvider: ShimProviderStatus] = [:]
+    @Published var shimAppBundleStatus = ShimAppBundleStatus.checking
 
     let service: HomeportService
     private var updateMonitorTask: Task<Void, Never>?
@@ -143,12 +149,25 @@ final class HomeportModel: ObservableObject {
         return status.detail ?? "No stored auth in this home"
     }
 
+    /// Returns true when the launch was started. For routing-enabled homes the launch
+    /// continues asynchronously (catalog publish, shim wiring) and later failures are
+    /// reported through `status`/`shimStatus`, not this return value.
     @discardableResult
     func launch(_ selector: String, target: LaunchTarget) -> Bool {
+        let actualSelector = modelSelector(for: selector)
+        if let home = resolveHome(selector: actualSelector), routingEnabled(for: home) {
+            launchWithRouting(home: home, target: target)
+            return true
+        }
+        return performLaunch(actualSelector, target: target)
+    }
+
+    @discardableResult
+    func performLaunch(_ selector: String, target: LaunchTarget, appBundle: URL? = nil) -> Bool {
         do {
             let actualSelector = modelSelector(for: selector)
             let missingLinks = try service.brokenLinkedTargets(selector: actualSelector)
-            let instance = try service.launch(selector: actualSelector, target: target, workspace: workspacePath)
+            let instance = try service.launch(selector: actualSelector, target: target, workspace: workspacePath, appBundle: appBundle)
             let warning = missingLinks.isEmpty ? "" : "; linked paths missing: \(missingLinks.joined(separator: ", "))"
             refresh(statusMessage: "Opened \(instance.homeName) in \(target.rawValue)\(warning)")
             return true
@@ -156,6 +175,16 @@ final class HomeportModel: ObservableObject {
             status = error.localizedDescription
             return false
         }
+    }
+
+    private func resolveHome(selector: String) -> CodexHome? {
+        if selector == "main" {
+            return state.homes.first { $0.kind == .main }
+        }
+        if selector == "temp" || selector == "temporary" {
+            return nil
+        }
+        return state.homes.first { $0.slug == selector || $0.name == selector }
     }
 
     func launchPreferred() {
@@ -547,6 +576,506 @@ final class HomeportModel: ObservableObject {
         }
     }
 
+    // Shim operations can overlap (e.g. a routed launch while a status check runs);
+    // a counter keeps isRunningShimCommand true until the last one finishes.
+    private func beginShimOperation() {
+        shimOperationCount += 1
+        isRunningShimCommand = true
+    }
+
+    private func endShimOperation() {
+        shimOperationCount = max(0, shimOperationCount - 1)
+        isRunningShimCommand = shimOperationCount > 0
+    }
+
+    func runShim(_ command: CodexShimCommand, home: CodexHome, executablePath: String, settingsPath: String, port: String) {
+        let resolvedExecutable = resolveShimExecutable(executablePath)
+        var arguments = shimBaseArguments(home: home, settingsPath: settingsPath, port: port)
+        arguments.append(command.rawValue)
+
+        beginShimOperation()
+        shimStatus = "Running \(command.title) for \(home.name)"
+        let commandArguments = arguments
+        let commandEnvironment = ProcessInfo.processInfo.environment
+        Task {
+            let result = await Task.detached { [resolvedExecutable, commandArguments, commandEnvironment] in
+                runCommand(executable: resolvedExecutable, arguments: commandArguments, environment: commandEnvironment)
+            }.value
+            await MainActor.run {
+                endShimOperation()
+                shimStatus = result.summary(successMessage: "\(command.title) finished")
+                refresh(statusMessage: result.succeeded ? "\(command.title) finished for \(home.name)" : result.summary(successMessage: ""))
+                refreshShimProviderStatuses(home: home)
+            }
+        }
+    }
+
+    func startAndWireShim(home: CodexHome, executablePath: String, settingsPath: String, port: String, defaultModelSlug: String?, commandEnvironment: [String: String] = ProcessInfo.processInfo.environment) {
+        let resolvedExecutable = resolveShimExecutable(executablePath)
+        let baseArguments = shimBaseArguments(home: home, settingsPath: settingsPath, port: port)
+
+        beginShimOperation()
+        shimStatus = "Starting shim for \(home.name)"
+        Task {
+            let result = await Task.detached { [resolvedExecutable, baseArguments, commandEnvironment] in
+                runShimStartWireSequence(
+                    executable: resolvedExecutable,
+                    baseArguments: baseArguments,
+                    defaultModelSlug: defaultModelSlug,
+                    environment: commandEnvironment
+                )
+            }.value
+            await MainActor.run {
+                endShimOperation()
+                shimStatus = result.summary(successMessage: "Shim is wired for \(home.name)")
+                refresh(statusMessage: result.succeeded ? "Shim is wired for \(home.name)" : result.summary(successMessage: ""))
+                refreshShimProviderStatuses(home: home)
+            }
+        }
+    }
+
+    func launchCodexWithShim(home: CodexHome, target: LaunchTarget, executablePath: String, settingsPath: String, port: String, defaultModelSlug: String?, commandEnvironment: [String: String] = ProcessInfo.processInfo.environment) {
+        let resolvedExecutable = resolveShimExecutable(executablePath)
+        let baseArguments = shimBaseArguments(home: home, settingsPath: settingsPath, port: port)
+
+        beginShimOperation()
+        shimStatus = "Starting model shim for \(home.name)"
+        status = shimStatus
+        Task {
+            let result = await Task.detached { [resolvedExecutable, baseArguments, commandEnvironment] in
+                runShimStartWireSequence(
+                    executable: resolvedExecutable,
+                    baseArguments: baseArguments,
+                    defaultModelSlug: defaultModelSlug,
+                    environment: commandEnvironment
+                )
+            }.value
+            await MainActor.run {
+                if result.succeeded {
+                    if target == .desktop {
+                        shimStatus = "Building Codex Shim app if needed"
+                    } else {
+                        shimStatus = "Opening \(home.name) in Terminal with shim"
+                    }
+                    status = shimStatus
+                } else {
+                    endShimOperation()
+                    shimStatus = result.summary(successMessage: "")
+                    refresh(statusMessage: shimStatus)
+                    refreshShimProviderStatuses(home: home)
+                }
+            }
+            guard result.succeeded else { return }
+            let appBundle: URL?
+            if target == .desktop {
+                let prepare = await Task.detached { [resolvedExecutable, baseArguments, commandEnvironment] in
+                    runCommand(
+                        executable: resolvedExecutable,
+                        arguments: baseArguments + ["prepare-app"],
+                        environment: commandEnvironment
+                    )
+                }.value
+                guard prepare.succeeded else {
+                    await MainActor.run {
+                        endShimOperation()
+                        shimStatus = prepare.summary(successMessage: "")
+                        refresh(statusMessage: shimStatus)
+                        refreshShimProviderStatuses(home: home)
+                    }
+                    return
+                }
+                appBundle = defaultShimmableCodexAppBundleURL()
+                await MainActor.run {
+                    shimStatus = "Verifying Codex Shim app"
+                    status = shimStatus
+                }
+                let appStatus = await Task.detached { [resolvedExecutable, commandEnvironment] in
+                    runCommand(executable: resolvedExecutable, arguments: ["app-status", "--json"], environment: commandEnvironment)
+                }.value
+                await MainActor.run {
+                    if appStatus.succeeded,
+                       let data = appStatus.output.data(using: .utf8),
+                       let status = ShimAppBundleStatus(data: data) {
+                        shimAppBundleStatus = status
+                    }
+                }
+            } else {
+                appBundle = nil
+            }
+            await MainActor.run {
+                endShimOperation()
+                if result.succeeded {
+                    shimStatus = target == .desktop
+                        ? "Opening \(home.name) in Codex Shim"
+                        : "Opening \(home.name) in Terminal with shim"
+                    status = shimStatus
+                    let launched = performLaunch(home.slug, target: target, appBundle: appBundle)
+                    shimStatus = launched
+                        ? "Opened \(home.name) in \(target.rawValue) with shim"
+                        : "Shim started, but launching \(home.name) failed: \(status)"
+                    if launched {
+                        status = "Opened \(home.name) in \(target.rawValue) with shim"
+                    }
+                }
+                refreshShimProviderStatuses(home: home)
+            }
+        }
+    }
+
+    func startShimAndOpenPicker(home: CodexHome, executablePath: String, settingsPath: String, port: String, defaultModelSlug: String?, commandEnvironment: [String: String] = ProcessInfo.processInfo.environment) {
+        let resolvedExecutable = resolveShimExecutable(executablePath)
+        let baseArguments = shimBaseArguments(home: home, settingsPath: settingsPath, port: port)
+
+        beginShimOperation()
+        shimStatus = "Starting shim before opening picker for \(home.name)"
+        Task {
+            let result = await Task.detached { [resolvedExecutable, baseArguments, commandEnvironment] in
+                runShimStartWireSequence(
+                    executable: resolvedExecutable,
+                    baseArguments: baseArguments,
+                    defaultModelSlug: defaultModelSlug,
+                    environment: commandEnvironment
+                )
+            }.value
+            await MainActor.run {
+                endShimOperation()
+                if result.succeeded {
+                    openShimPicker(port: port)
+                    refresh(statusMessage: "Shim picker opened for \(home.name)")
+                } else {
+                    shimStatus = result.summary(successMessage: "")
+                    refresh(statusMessage: shimStatus)
+                }
+                refreshShimProviderStatuses(home: home)
+            }
+        }
+    }
+
+    // MARK: - Per-home model routing
+
+    func modelRouting(for home: CodexHome) -> ModelRoutingConfig? {
+        state.homes.first { $0.id == home.id }?.modelRouting
+    }
+
+    func routingEnabled(for home: CodexHome) -> Bool {
+        modelRouting(for: home)?.isEnabled == true
+    }
+
+    func routingProviders(for home: CodexHome) -> Set<ShimLoginProvider> {
+        guard let routing = modelRouting(for: home) else {
+            return ShimLoginProvider.defaultEnabledSet
+        }
+        return Set(routing.providers.compactMap(ShimLoginProvider.init(rawValue:)))
+    }
+
+    func setRoutingEnabled(_ enabled: Bool, for home: CodexHome) {
+        var routing = modelRouting(for: home) ?? ModelRoutingConfig(
+            providers: ShimLoginProvider.defaultEnabledSet.map(\.rawValue)
+        )
+        routing.isEnabled = enabled
+        saveModelRouting(routing, for: home, statusMessage: enabled ? "Model routing on for \(home.name)" : "Model routing off for \(home.name)")
+        if enabled {
+            withRoutingCatalog(for: home) { _, _ in }
+            refreshShimProviderStatuses(home: home)
+        } else {
+            runShim(.disable, home: home, executablePath: state.preferences.shimExecutablePath, settingsPath: "", port: state.preferences.shimPort)
+        }
+    }
+
+    func setRoutingProvider(_ provider: ShimLoginProvider, enabled: Bool, for home: CodexHome) {
+        guard var routing = modelRouting(for: home) else {
+            return
+        }
+        var providers = Set(routing.providers.compactMap(ShimLoginProvider.init(rawValue:)))
+        if enabled {
+            providers.insert(provider)
+        } else {
+            providers.remove(provider)
+        }
+        routing.providers = ShimLoginProvider.allCases.filter(providers.contains).map(\.rawValue)
+        saveModelRouting(routing, for: home, statusMessage: nil)
+    }
+
+    func setRoutingAllowsAPIKeyPresets(_ allowed: Bool, for home: CodexHome) {
+        guard var routing = modelRouting(for: home) else {
+            return
+        }
+        routing.allowAPIKeyPresets = allowed
+        saveModelRouting(routing, for: home, statusMessage: nil)
+    }
+
+    private func saveModelRouting(_ routing: ModelRoutingConfig, for home: CodexHome, statusMessage: String?) {
+        do {
+            try service.setModelRouting(id: home.id, routing: routing)
+            refresh(statusMessage: statusMessage)
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func launchWithRouting(home: CodexHome, target: LaunchTarget) {
+        withRoutingCatalog(for: home) { [weak self] catalog, providers in
+            guard let self else { return }
+            self.launchCodexWithShim(
+                home: home,
+                target: target,
+                executablePath: self.state.preferences.shimExecutablePath,
+                settingsPath: catalog.path,
+                port: self.state.preferences.shimPort,
+                defaultModelSlug: catalog.defaultModelSlug,
+                commandEnvironment: shimCommandEnvironment(enabledProviders: providers)
+            )
+        }
+    }
+
+    func restartRouting(for home: CodexHome) {
+        withRoutingCatalog(for: home) { [weak self] catalog, providers in
+            guard let self else { return }
+            self.startAndWireShim(
+                home: home,
+                executablePath: self.state.preferences.shimExecutablePath,
+                settingsPath: catalog.path,
+                port: self.state.preferences.shimPort,
+                defaultModelSlug: catalog.defaultModelSlug,
+                commandEnvironment: shimCommandEnvironment(enabledProviders: providers)
+            )
+        }
+    }
+
+    func openRoutingPicker(for home: CodexHome) {
+        withRoutingCatalog(for: home) { [weak self] catalog, providers in
+            guard let self else { return }
+            self.startShimAndOpenPicker(
+                home: home,
+                executablePath: self.state.preferences.shimExecutablePath,
+                settingsPath: catalog.path,
+                port: self.state.preferences.shimPort,
+                defaultModelSlug: catalog.defaultModelSlug,
+                commandEnvironment: shimCommandEnvironment(enabledProviders: providers)
+            )
+        }
+    }
+
+    func checkRoutingStatus(for home: CodexHome) {
+        runShim(.status, home: home, executablePath: state.preferences.shimExecutablePath, settingsPath: "", port: state.preferences.shimPort)
+    }
+
+    /// Builds the provider catalog off the main thread (it shells out to `ollama list`),
+    /// then hands the written catalog back on the main actor. If the per-home config
+    /// changed while building, the catalog is rebuilt with the fresh settings.
+    private func withRoutingCatalog(for home: CodexHome, attempt: Int = 0, then continuation: @escaping ((path: String, defaultModelSlug: String?), Set<ShimLoginProvider>) -> Void) {
+        let providers = routingProviders(for: home)
+        guard !providers.isEmpty else {
+            shimStatus = "Enable at least one provider for \(home.name)"
+            status = shimStatus
+            return
+        }
+        let allowAPIKeyPresets = modelRouting(for: home)?.allowAPIKeyPresets == true
+        beginShimOperation()
+        shimStatus = "Publishing model catalog for \(home.name)"
+        Task {
+            let result = await Task.detached { [home, providers, allowAPIKeyPresets] in
+                Result {
+                    try buildAndWriteShimCatalog(
+                        home: home,
+                        enabledProviders: providers,
+                        allowAPIKeyPresets: allowAPIKeyPresets,
+                        environment: ProcessInfo.processInfo.environment
+                    )
+                }
+            }.value
+            await MainActor.run {
+                endShimOperation()
+                let configChanged = routingProviders(for: home) != providers
+                    || (modelRouting(for: home)?.allowAPIKeyPresets == true) != allowAPIKeyPresets
+                if configChanged, attempt < 3 {
+                    withRoutingCatalog(for: home, attempt: attempt + 1, then: continuation)
+                    return
+                }
+                switch result {
+                case .success(let catalog):
+                    let included = catalog.included.isEmpty ? "no providers" : catalog.included.joined(separator: ", ")
+                    shimStatus = "Published \(included) for \(home.name)"
+                    continuation((catalog.path, catalog.defaultModelSlug), providers)
+                case .failure(let error):
+                    shimStatus = "Catalog failed: \(error.localizedDescription)"
+                    status = shimStatus
+                }
+            }
+        }
+    }
+
+    func setShimExecutablePath(_ path: String) {
+        do {
+            var next = try service.loadState()
+            next.preferences.shimExecutablePath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            try service.saveState(next)
+            refresh(statusMessage: "Saved shim executable path")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func setShimPort(_ port: String) {
+        do {
+            var next = try service.loadState()
+            let trimmed = port.trimmingCharacters(in: .whitespacesAndNewlines)
+            next.preferences.shimPort = trimmed.isEmpty ? "8765" : trimmed
+            try service.saveState(next)
+            refresh(statusMessage: "Saved shim port")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    private func shimBaseArguments(home: CodexHome, settingsPath: String, port: String) -> [String] {
+        let trimmedSettings = settingsPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPort = port.trimmingCharacters(in: .whitespacesAndNewlines)
+        var arguments: [String] = []
+        if !trimmedSettings.isEmpty {
+            arguments += ["--settings", expandUserPath(trimmedSettings)]
+        }
+        arguments += ["--codex-home", home.homePath]
+        if !trimmedPort.isEmpty {
+            arguments += ["--port", trimmedPort]
+        }
+        return arguments
+    }
+
+    func loginWithProviderCLI(_ provider: ShimLoginProvider, home: CodexHome? = nil) {
+        let command = provider.shellCommand(home: home)
+        let script = Launcher().terminalAppleScript(command: command, terminal: state.preferredTerminal)
+        let result = runCommand(executable: "/usr/bin/osascript", arguments: ["-e", script], environment: ProcessInfo.processInfo.environment)
+        if result.succeeded {
+            shimStatus = "Opened \(provider.title) login"
+            status = "Opened \(provider.title) login"
+            refreshShimProviderStatuses(home: home)
+        } else {
+            shimStatus = result.summary(successMessage: "")
+            status = shimStatus
+        }
+    }
+
+    func refreshShimProviderStatuses(home: CodexHome?) {
+        let selectedHome = home
+        let codexStatus = selectedHome.map { codexProviderStatus(for: $0) }
+            ?? ShimProviderStatus(state: .unknown, detail: "Choose a home first")
+        shimProviderStatuses[.codex] = codexStatus
+
+        let environment = ProcessInfo.processInfo.environment
+        Task {
+            let statuses = await Task.detached { [environment] in
+                [
+                    ShimLoginProvider.grok: grokProviderStatus(environment: environment),
+                    ShimLoginProvider.claude: claudeProviderStatus(environment: environment),
+                    ShimLoginProvider.ollama: ollamaProviderStatus(environment: environment),
+                    ShimLoginProvider.cursor: cursorProviderStatus(environment: environment)
+                ]
+            }.value
+            await MainActor.run {
+                for (provider, status) in statuses {
+                    shimProviderStatuses[provider] = status
+                }
+            }
+        }
+    }
+
+    func providerStatus(_ provider: ShimLoginProvider, home: CodexHome?) -> ShimProviderStatus {
+        if provider == .codex, let home {
+            return codexProviderStatus(for: home)
+        }
+        return shimProviderStatuses[provider] ?? ShimProviderStatus(state: .unknown, detail: "Not checked yet")
+    }
+
+    private func codexProviderStatus(for home: CodexHome) -> ShimProviderStatus {
+        let status = authStatus(for: home)
+        if status.isLoggedIn {
+            return ShimProviderStatus(state: .ready, detail: status.accountLabel ?? "Signed in for this home")
+        }
+        if status.hasStoredCredentials {
+            return ShimProviderStatus(state: .warning, detail: status.accountLabel ?? "Stored credentials found")
+        }
+        return ShimProviderStatus(state: .missing, detail: "No auth in selected home")
+    }
+
+    func openShimPicker(port: String) {
+        let trimmedPort = port.trimmingCharacters(in: .whitespacesAndNewlines)
+        let portValue = trimmedPort.isEmpty ? "8765" : trimmedPort
+        guard let url = URL(string: "http://127.0.0.1:\(portValue)/picker") else {
+            shimStatus = "Invalid shim picker port"
+            return
+        }
+        NSWorkspace.shared.open(url)
+        shimStatus = "Opened shim picker"
+    }
+
+    func refreshShimAppBundleStatus(executablePath: String) {
+        let resolvedExecutable = resolveShimExecutable(executablePath)
+        let environment = ProcessInfo.processInfo.environment
+        shimAppBundleStatus = .checking
+        Task {
+            let result = await Task.detached {
+                runCommand(executable: resolvedExecutable, arguments: ["app-status", "--json"], environment: environment)
+            }.value
+            await MainActor.run {
+                if result.succeeded,
+                   let data = result.output.data(using: .utf8),
+                   let status = ShimAppBundleStatus(data: data) {
+                    shimAppBundleStatus = status
+                } else {
+                    shimAppBundleStatus = ShimAppBundleStatus(error: result.summary(successMessage: ""))
+                }
+            }
+        }
+    }
+
+    func rebuildShimAppBundle(executablePath: String) {
+        let resolvedExecutable = resolveShimExecutable(executablePath)
+        let environment = ProcessInfo.processInfo.environment
+        beginShimOperation()
+        shimStatus = "Repairing Codex Shim app"
+        status = shimStatus
+        Task {
+            let result = await Task.detached {
+                runCommand(executable: resolvedExecutable, arguments: ["prepare-app", "--replace"], environment: environment)
+            }.value
+            await MainActor.run {
+                shimStatus = result.succeeded ? "Verifying Codex Shim app" : result.summary(successMessage: "")
+                status = shimStatus
+            }
+            let statusResult = await Task.detached {
+                runCommand(executable: resolvedExecutable, arguments: ["app-status", "--json"], environment: environment)
+            }.value
+            await MainActor.run {
+                endShimOperation()
+                shimStatus = result.summary(successMessage: "Repaired Codex Shim app")
+                if statusResult.succeeded,
+                   let data = statusResult.output.data(using: .utf8),
+                   let status = ShimAppBundleStatus(data: data) {
+                    shimAppBundleStatus = status
+                } else {
+                    shimAppBundleStatus = ShimAppBundleStatus(error: statusResult.summary(successMessage: ""))
+                }
+            }
+        }
+    }
+
+    func defaultShimExecutablePath() -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "\(home)/github.com/sybil-solutions/codex-shim/.venv/bin/codex-shim",
+            "\(home)/.local/bin/codex-shim",
+            "/opt/homebrew/bin/codex-shim",
+            "/usr/local/bin/codex-shim"
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? candidates[0]
+    }
+
+    private func resolveShimExecutable(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? defaultShimExecutablePath() : expandUserPath(trimmed)
+    }
+
     private func modelSelector(for selector: String) -> String {
         selector == "preferred" ? (state.preferences.launchTemporaryByDefault ? "temp" : "main") : selector
     }
@@ -578,6 +1107,727 @@ final class HomeportModel: ObservableObject {
         }
         state.preferences.lastClonePolicies = state.preferences.clonePolicies
     }
+}
+
+enum CodexShimCommand: String, CaseIterable, Identifiable {
+    case enable
+    case restart
+    case status
+    case disable
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .enable: "Enable Shim"
+        case .restart: "Restart Shim"
+        case .status: "Check Shim"
+        case .disable: "Disable Shim"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .enable: "bolt.fill"
+        case .restart: "arrow.clockwise"
+        case .status: "waveform.path.ecg"
+        case .disable: "stop.circle"
+        }
+    }
+}
+
+enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
+    case codex
+    case grok
+    case claude
+    case ollama
+    case cursor
+
+    var id: String { rawValue }
+
+    static var defaultEnabledSet: Set<ShimLoginProvider> {
+        Set(allCases)
+    }
+
+    var title: String {
+        switch self {
+        case .codex: "Codex"
+        case .grok: "Grok"
+        case .claude: "Claude"
+        case .ollama: "Ollama"
+        case .cursor: "Cursor"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .codex: "key.fill"
+        case .grok: "sparkles"
+        case .claude: "brain.head.profile"
+        case .ollama: "cloud.fill"
+        case .cursor: "cursorarrow.click.2"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .codex: "Scoped to selected CODEX_HOME"
+        case .grok: "Uses XAI_API_KEY via xAI API"
+        case .claude: "Uses Claude Code session"
+        case .ollama: "Uses Ollama Cloud sign-in"
+        case .cursor: "Uses cursor-agent session"
+        }
+    }
+
+    func shellCommand(home: CodexHome?) -> String {
+        switch self {
+        case .codex:
+            let homePath = home?.homePath ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
+            return "CODEX_HOME=\(shellQuote(homePath)) codex login"
+        case .grok:
+            return "PATH=\(shellQuote(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".grok/bin").path)):$PATH grok login"
+        case .claude:
+            return "claude auth login"
+        case .ollama:
+            return "ollama signin"
+        case .cursor:
+            return "cursor-agent login"
+        }
+    }
+}
+
+enum ShimProviderState {
+    case ready
+    case warning
+    case missing
+    case unknown
+
+    var label: String {
+        switch self {
+        case .ready: "Signed in"
+        case .warning: "Check"
+        case .missing: "Needs login"
+        case .unknown: "Unknown"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .ready: "checkmark.seal.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        case .missing: "key.slash"
+        case .unknown: "questionmark.circle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .ready: .blue
+        case .warning: .orange
+        case .missing: .secondary
+        case .unknown: .secondary
+        }
+    }
+}
+
+struct ShimProviderStatus {
+    var state: ShimProviderState
+    var detail: String
+}
+
+struct ShimAppBundleStatus {
+    var sourcePath: String
+    var destinationPath: String
+    var sourceExists: Bool
+    var destinationExists: Bool
+    var sourceVersion: String
+    var destinationVersion: String
+    var sourceHash: String
+    var destinationHash: String
+    var patched: Bool
+    var stale: Bool
+    var browserBridgeReady: Bool
+    var destinationBundleIdentifier: String
+    var preparedAt: String?
+    var error: String?
+    var isChecking: Bool
+
+    static let checking = ShimAppBundleStatus(
+        sourcePath: "/Applications/Codex.app",
+        destinationPath: defaultShimmableCodexAppBundleURL().path,
+        sourceExists: false,
+        destinationExists: false,
+        sourceVersion: "checking",
+        destinationVersion: "checking",
+        sourceHash: "",
+        destinationHash: "",
+        patched: false,
+        stale: true,
+        browserBridgeReady: false,
+        destinationBundleIdentifier: "",
+        preparedAt: nil,
+        error: nil,
+        isChecking: true
+    )
+
+    init(error: String) {
+        self = .checking
+        self.sourceVersion = "unknown"
+        self.destinationVersion = "unknown"
+        self.error = error
+        self.isChecking = false
+    }
+
+    init(
+        sourcePath: String,
+        destinationPath: String,
+        sourceExists: Bool,
+        destinationExists: Bool,
+        sourceVersion: String,
+        destinationVersion: String,
+        sourceHash: String,
+        destinationHash: String,
+        patched: Bool,
+        stale: Bool,
+        browserBridgeReady: Bool,
+        destinationBundleIdentifier: String,
+        preparedAt: String?,
+        error: String?,
+        isChecking: Bool
+    ) {
+        self.sourcePath = sourcePath
+        self.destinationPath = destinationPath
+        self.sourceExists = sourceExists
+        self.destinationExists = destinationExists
+        self.sourceVersion = sourceVersion
+        self.destinationVersion = destinationVersion
+        self.sourceHash = sourceHash
+        self.destinationHash = destinationHash
+        self.patched = patched
+        self.stale = stale
+        self.browserBridgeReady = browserBridgeReady
+        self.destinationBundleIdentifier = destinationBundleIdentifier
+        self.preparedAt = preparedAt
+        self.error = error
+        self.isChecking = isChecking
+    }
+
+    init?(data: Data) {
+        guard
+            let object = try? JSONSerialization.jsonObject(with: data),
+            let json = object as? [String: Any]
+        else {
+            return nil
+        }
+        let source = json["source"] as? [String: Any]
+        let destination = json["destination"] as? [String: Any]
+        let metadata = json["metadata"] as? [String: Any]
+        self.init(
+            sourcePath: json["source_path"] as? String ?? source?["path"] as? String ?? "/Applications/Codex.app",
+            destinationPath: json["destination_path"] as? String ?? destination?["path"] as? String ?? defaultShimmableCodexAppBundleURL().path,
+            sourceExists: json["source_exists"] as? Bool ?? false,
+            destinationExists: json["destination_exists"] as? Bool ?? false,
+            sourceVersion: Self.versionText(source),
+            destinationVersion: Self.versionText(destination),
+            sourceHash: Self.shortHash(source?["app_asar_sha256"]),
+            destinationHash: Self.shortHash(destination?["app_asar_sha256"]),
+            patched: json["patched"] as? Bool ?? false,
+            stale: json["stale"] as? Bool ?? true,
+            browserBridgeReady: true,
+            destinationBundleIdentifier: Self.bundleIdentifier(destination),
+            preparedAt: metadata?["prepared_at"] as? String,
+            error: nil,
+            isChecking: false
+        )
+    }
+
+    var stateTitle: String {
+        if isChecking { return "Checking shimmable app" }
+        if error != nil { return "Could not inspect shimmable app" }
+        if !destinationExists { return "Codex Shim app is not built" }
+        if stale { return "Codex Shim app needs rebuild" }
+        if !patched { return "Codex Shim app is unpatched" }
+        return "Codex Shim app is ready"
+    }
+
+    var stateDetail: String {
+        if isChecking { return "Inspecting copied app and Browser launch mode." }
+        if error != nil { return "Use Repair Shim App to rebuild the copied app and refresh diagnostics." }
+        if !destinationExists { return "First routed App launch will build this automatically." }
+        if stale { return "Repair Shim App will rebuild from the current Codex app." }
+        if !patched { return "The copied app is missing codex-shim's ASAR patch." }
+        return "Homeport opens the copy in Browser-compatible dev mode so in-app Browser sockets do not require copied-app peer signing."
+    }
+
+    var stateSymbol: String {
+        if isChecking { return "hourglass" }
+        if error != nil { return "exclamationmark.triangle.fill" }
+        if !destinationExists || stale || !patched { return "wrench.and.screwdriver.fill" }
+        return "checkmark.seal.fill"
+    }
+
+    var stateColor: Color {
+        if isChecking { return .blue }
+        if error != nil || stale || !patched { return .orange }
+        if !destinationExists { return .secondary }
+        return .blue
+    }
+
+    private static func versionText(_ signature: [String: Any]?) -> String {
+        guard let info = signature?["info"] as? [String: Any] else {
+            return "missing"
+        }
+        let short = (info["CFBundleShortVersionString"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let build = (info["CFBundleVersion"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !short.isEmpty && !build.isEmpty {
+            return "\(short) (\(build))"
+        }
+        return short.isEmpty ? (build.isEmpty ? "unknown" : build) : short
+    }
+
+    private static func shortHash(_ value: Any?) -> String {
+        String((value as? String ?? "").prefix(12))
+    }
+
+    private static func bundleIdentifier(_ signature: [String: Any]?) -> String {
+        guard let info = signature?["info"] as? [String: Any] else {
+            return ""
+        }
+        return (info["CFBundleIdentifier"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+}
+
+struct ShimCatalogPlan {
+    var payload: [String: Any]
+    var defaultModelSlug: String?
+    var included: [String]
+    var skipped: [String]
+}
+
+struct CommandResult {
+    var exitCode: Int32
+    /// stdout only — safe for JSON parsing even when the command logs to stderr.
+    var output: String
+    var errorOutput: String = ""
+
+    var succeeded: Bool {
+        exitCode == 0
+    }
+
+    var combinedOutput: String {
+        [output, errorOutput]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+    }
+
+    func summary(successMessage: String) -> String {
+        let trimmed = combinedOutput
+        if succeeded {
+            return trimmed.isEmpty ? successMessage : trimmed
+        }
+        return trimmed.isEmpty ? "Command failed with exit code \(exitCode)" : trimmed
+    }
+}
+
+func shimCatalogSettingsURL(for home: CodexHome) -> URL {
+    URL(fileURLWithPath: home.homePath, isDirectory: true)
+        .appendingPathComponent(".codex-shim", isDirectory: true)
+        .appendingPathComponent("providers-models.json")
+}
+
+/// Shells out to `ollama list` while building the plan — never call on the main thread.
+func buildAndWriteShimCatalog(
+    home: CodexHome,
+    enabledProviders: Set<ShimLoginProvider>,
+    allowAPIKeyPresets: Bool,
+    environment: [String: String]
+) throws -> (path: String, defaultModelSlug: String?, included: [String]) {
+    let settingsURL = shimCatalogSettingsURL(for: home)
+    try FileManager.default.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let plan = buildShimCatalogPlan(
+        enabledProviders: enabledProviders,
+        allowAPIKeyPresets: allowAPIKeyPresets,
+        environment: environment
+    )
+    let data = try JSONSerialization.data(withJSONObject: plan.payload, options: [.prettyPrinted, .sortedKeys])
+    try data.write(to: settingsURL, options: .atomic)
+    return (settingsURL.path, plan.defaultModelSlug, plan.included)
+}
+
+func defaultShimmableCodexAppBundleURL() -> URL {
+    FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Applications", isDirectory: true)
+        .appendingPathComponent("Codex Shim.app", isDirectory: true)
+}
+
+func buildShimCatalogPlan(enabledProviders: Set<ShimLoginProvider>, allowAPIKeyPresets: Bool, environment: [String: String]) -> ShimCatalogPlan {
+    var models: [[String: Any]] = []
+    var included: [String] = []
+    var skipped: [String] = []
+
+    if enabledProviders.contains(.codex) {
+        included.append("ChatGPT/Codex")
+    } else {
+        skipped.append("ChatGPT/Codex disabled")
+    }
+
+    if enabledProviders.contains(.ollama) {
+        let ollamaModels = uniqueModels(ollamaCloudModels(environment: environment) + ollamaInstalledLocalModels(environment: environment))
+        if ollamaModels.isEmpty {
+            skipped.append("Ollama has no listed models")
+        } else {
+            models.append(contentsOf: ollamaModels.map(ollamaModelPayload))
+            included.append("Ollama (\(ollamaModels.count))")
+        }
+    } else {
+        skipped.append("Ollama disabled")
+    }
+
+    if enabledProviders.contains(.grok) {
+        if allowAPIKeyPresets, !(environment["XAI_API_KEY"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            models.append(contentsOf: grokAPIModelPayloads())
+            included.append("Grok API")
+        } else if allowAPIKeyPresets {
+            skipped.append("Grok API-key routes missing XAI_API_KEY")
+        } else {
+            skipped.append("Grok API-key routes disabled")
+        }
+    } else {
+        skipped.append("Grok disabled")
+    }
+
+    if enabledProviders.contains(.claude) {
+        skipped.append("Claude CLI passthrough gated until tool bridge is verified")
+    } else {
+        skipped.append("Claude disabled")
+    }
+
+    if enabledProviders.contains(.cursor) {
+        included.append("Cursor")
+    } else {
+        skipped.append("Cursor disabled")
+    }
+
+    let defaultSlug = models.first?["slug"] as? String
+        ?? (enabledProviders.contains(.codex) ? "gpt-5.5" : nil)
+        ?? (enabledProviders.contains(.cursor) ? "composer-2-5" : nil)
+
+    return ShimCatalogPlan(
+        payload: [
+            "models": models,
+            "notes": [
+                "Provider toggles are scoped to this Codex home.",
+                "ChatGPT/Codex and Cursor are discovered by codex-shim from supported login state.",
+                "Grok is written only when API-key routes are enabled and XAI_API_KEY is available.",
+                "Claude CLI login is reported here, but not written to the catalog until codex-shim has a verified tool bridge.",
+                "Included: \(included.joined(separator: ", "))",
+                "Skipped: \(skipped.joined(separator: ", "))"
+            ]
+        ],
+        defaultModelSlug: defaultSlug,
+        included: included,
+        skipped: skipped
+    )
+}
+
+func shimCommandEnvironment(enabledProviders: Set<ShimLoginProvider>) -> [String: String] {
+    var environment = ProcessInfo.processInfo.environment
+    if enabledProviders.contains(.codex) {
+        environment.removeValue(forKey: "CODEX_SHIM_DISABLE_CHATGPT")
+    } else {
+        environment["CODEX_SHIM_DISABLE_CHATGPT"] = "1"
+    }
+    if enabledProviders.contains(.cursor) {
+        environment.removeValue(forKey: "CODEX_SHIM_DISABLE_CURSOR")
+    } else {
+        environment["CODEX_SHIM_DISABLE_CURSOR"] = "1"
+    }
+    return environment
+}
+
+// Written on one queue, read after DispatchGroup.wait establishes happens-before.
+private final class PipeDrain: @unchecked Sendable {
+    var data = Data()
+}
+
+func runCommand(executable: String, arguments: [String], environment: [String: String]) -> CommandResult {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    process.environment = environment
+    let outputPipe = Pipe()
+    let errorPipe = Pipe()
+    process.standardOutput = outputPipe
+    process.standardError = errorPipe
+    do {
+        try process.run()
+        // Drain both pipes before waiting: output beyond the pipe buffer deadlocks waitUntilExit.
+        let errorDrain = PipeDrain()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            errorDrain.data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        group.wait()
+        process.waitUntilExit()
+        let output = String(data: outputData, encoding: .utf8) ?? ""
+        let error = String(data: errorDrain.data, encoding: .utf8) ?? ""
+        return CommandResult(exitCode: process.terminationStatus, output: output, errorOutput: error)
+    } catch {
+        return CommandResult(exitCode: 127, output: error.localizedDescription)
+    }
+}
+
+func runShimStartWireSequence(executable: String, baseArguments: [String], defaultModelSlug: String?, environment: [String: String]) -> CommandResult {
+    let restart = runCommand(executable: executable, arguments: baseArguments + [CodexShimCommand.restart.rawValue], environment: environment)
+    if !restart.succeeded {
+        return restart
+    }
+    let enable = runCommand(executable: executable, arguments: baseArguments + [CodexShimCommand.enable.rawValue], environment: environment)
+    guard enable.succeeded else {
+        return CommandResult(exitCode: enable.exitCode, output: [restart.combinedOutput, enable.combinedOutput].joined(separator: "\n"))
+    }
+    let trimmedSlug = defaultModelSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !trimmedSlug.isEmpty else {
+        return CommandResult(exitCode: enable.exitCode, output: [restart.combinedOutput, enable.combinedOutput].joined(separator: "\n"))
+    }
+    let select = runCommand(executable: executable, arguments: baseArguments + ["model", "use", trimmedSlug], environment: environment)
+    return CommandResult(exitCode: select.exitCode, output: [restart.combinedOutput, enable.combinedOutput, select.combinedOutput].joined(separator: "\n"))
+}
+
+func expandUserPath(_ path: String) -> String {
+    if path == "~" {
+        return FileManager.default.homeDirectoryForCurrentUser.path
+    }
+    if path.hasPrefix("~/") {
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(String(path.dropFirst(2)))
+            .path
+    }
+    return path
+}
+
+func grokProviderStatus(environment: [String: String]) -> ShimProviderStatus {
+    guard let executable = findExecutable("grok", extraPaths: [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".grok/bin").path]) else {
+        return ShimProviderStatus(state: .missing, detail: "Grok CLI not found")
+    }
+    let result = runCommand(executable: executable, arguments: ["models"], environment: environment)
+    guard result.succeeded else {
+        return ShimProviderStatus(state: .warning, detail: "Grok CLI found; models check failed")
+    }
+    let output = result.combinedOutput
+    let models = output
+        .split(separator: "\n")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { $0.hasPrefix("- ") || $0.hasPrefix("* ") }
+    let hasAPIKey = !(environment["XAI_API_KEY"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    if hasAPIKey {
+        return ShimProviderStatus(state: .ready, detail: "XAI_API_KEY ready; \(models.count) Grok API routes visible")
+    }
+    return ShimProviderStatus(state: .warning, detail: "Grok CLI works; set XAI_API_KEY for shim API routes")
+}
+
+func claudeProviderStatus(environment: [String: String]) -> ShimProviderStatus {
+    guard let executable = findExecutable("claude", extraPaths: [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path]) else {
+        return ShimProviderStatus(state: .missing, detail: "Claude CLI not found")
+    }
+    let result = runCommand(executable: executable, arguments: ["auth", "status"], environment: environment)
+    guard result.succeeded else {
+        return ShimProviderStatus(state: .warning, detail: "Claude CLI found; auth status failed")
+    }
+    guard let data = result.output.data(using: .utf8),
+          let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        let detail = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ShimProviderStatus(state: .warning, detail: detail.isEmpty ? "Claude auth status unknown" : detail)
+    }
+    let loggedIn = payload["loggedIn"] as? Bool == true
+    let authMethod = (payload["authMethod"] as? String) ?? "unknown auth"
+    let subscription = (payload["subscriptionType"] as? String) ?? "unknown plan"
+    if loggedIn {
+        return ShimProviderStatus(state: .ready, detail: "Claude \(subscription) via \(authMethod); tool bridge gated")
+    }
+    return ShimProviderStatus(state: .missing, detail: "Run Claude auth login")
+}
+
+func ollamaProviderStatus(environment: [String: String]) -> ShimProviderStatus {
+    guard let executable = findExecutable("ollama", extraPaths: []) else {
+        return ShimProviderStatus(state: .missing, detail: "Ollama CLI not found")
+    }
+    let result = runCommand(executable: executable, arguments: ["list"], environment: environment)
+    guard result.succeeded else {
+        return ShimProviderStatus(state: .warning, detail: "Ollama is installed; sign-in/list check failed")
+    }
+    let cloudCount = ollamaCloudModels(environment: environment).count
+    if cloudCount > 0 {
+        return ShimProviderStatus(state: .ready, detail: "\(cloudCount) Ollama Cloud routes available")
+    }
+    return ShimProviderStatus(state: .warning, detail: "Ollama works; no cloud model visible")
+}
+
+func ollamaModelPayload(_ model: String) -> [String: Any] {
+    [
+        "slug": slug(from: "ollama-\(model)"),
+        "model": model,
+        "display_name": "Ollama \(ollamaDisplayName(for: model))",
+        "provider": "generic-chat-completion-api",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "api_key": "ollama",
+        "reasoning_levels": ["low", "medium", "high", "xhigh"],
+        "default_reasoning_level": "medium"
+    ]
+}
+
+func ollamaCloudModels(environment: [String: String]) -> [String] {
+    uniqueModels(knownOllamaCloudModels + ollamaListedModels(
+        matching: { isOllamaCloudModel($0) && !isOllamaEmbeddingModel($0) },
+        environment: environment
+    ))
+}
+
+func ollamaInstalledLocalModels(environment: [String: String]) -> [String] {
+    let models = ollamaListedModels(
+        matching: { !isOllamaCloudModel($0) && !isOllamaEmbeddingModel($0) },
+        environment: environment
+    )
+    return uniqueModels(models)
+}
+
+func ollamaListedModels(matching predicate: (String) -> Bool, environment: [String: String]) -> [String] {
+    guard let executable = findExecutable("ollama", extraPaths: []) else {
+        return []
+    }
+    let result = runCommand(executable: executable, arguments: ["list"], environment: environment)
+    guard result.succeeded else {
+        return []
+    }
+    var models: [String] = []
+    for line in result.output.split(separator: "\n").dropFirst() {
+        guard let name = line.split(separator: " ").first.map(String.init), predicate(name) else {
+            continue
+        }
+        models.append(name)
+    }
+    return models
+}
+
+let knownOllamaCloudModels = [
+    "glm-5.2:cloud",
+    "kimi-k2.7-code:cloud",
+    "nemotron-3-ultra:cloud",
+    "minimax-m3:cloud",
+    "deepseek-v4-flash:cloud",
+    "deepseek-v4-pro:cloud",
+    "glm-5.1:cloud",
+    "kimi-k2.6:cloud",
+    "minimax-m2.7:cloud",
+    "gemma4:cloud",
+    "nemotron-3-super:cloud",
+    "qwen3.5:cloud",
+    "minimax-m2.5:cloud",
+    "glm-5:cloud",
+    "kimi-k2.5:cloud",
+    "glm-4.7:cloud",
+    "gemini-3-flash-preview:cloud",
+    "devstral-2:123b-cloud",
+    "devstral-small-2:24b-cloud",
+    "gpt-oss:120b-cloud"
+]
+
+func isOllamaCloudModel(_ model: String) -> Bool {
+    model.contains(":cloud") || model.hasSuffix("-cloud")
+}
+
+func isOllamaEmbeddingModel(_ model: String) -> Bool {
+    model.lowercased().contains("embed")
+}
+
+func uniqueModels(_ models: [String]) -> [String] {
+    var seen = Set<String>()
+    return models.filter { seen.insert($0).inserted }
+}
+
+func ollamaDisplayName(for model: String) -> String {
+    let trimmed = model
+        .replacingOccurrences(of: ":cloud", with: "")
+        .replacingOccurrences(of: "-cloud", with: "")
+    return trimmed
+        .split(separator: "-")
+        .map { word in
+            let text = String(word)
+            let uppercased = text.uppercased()
+            if ["GLM", "GPT", "OSS", "KIMI", "QWEN"].contains(uppercased) || text.allSatisfy({ $0.isNumber }) {
+                return uppercased
+            }
+            if text.count <= 2 {
+                return uppercased
+            }
+            return text.prefix(1).uppercased() + text.dropFirst()
+        }
+        .joined(separator: " ")
+}
+
+func grokAPIModelPayloads() -> [[String: Any]] {
+    [
+        [
+            "slug": "grok-build",
+            "model": "grok-build-0.1",
+            "display_name": "Grok Build",
+            "provider": "generic-chat-completion-api",
+            "base_url": "https://api.x.ai/v1",
+            "api_key_env": "XAI_API_KEY",
+            "max_context_limit": 256000,
+            "reasoning_levels": ["low", "medium", "high"],
+            "default_reasoning_level": "medium"
+        ]
+    ]
+}
+
+func cursorProviderStatus(environment: [String: String]) -> ShimProviderStatus {
+    guard let executable = findExecutable("cursor-agent", extraPaths: []) else {
+        return ShimProviderStatus(state: .missing, detail: "cursor-agent not found")
+    }
+    let result = runCommand(executable: executable, arguments: ["status"], environment: environment)
+    guard result.succeeded else {
+        return ShimProviderStatus(state: .warning, detail: "cursor-agent found; status failed")
+    }
+    let lowercasedOutput = result.output.lowercased()
+    if lowercasedOutput.contains("logged in") || lowercasedOutput.contains("authenticated") {
+        return ShimProviderStatus(state: .ready, detail: "cursor-agent is authenticated")
+    }
+    let detail = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    return ShimProviderStatus(state: .warning, detail: detail.isEmpty ? "cursor-agent status unknown" : detail)
+}
+
+func findExecutable(_ name: String, extraPaths: [String]) -> String? {
+    let environmentPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    let paths = (extraPaths + environmentPath.split(separator: ":").map(String.init) + ["/usr/local/bin", "/opt/homebrew/bin"])
+    for path in paths {
+        let candidate = URL(fileURLWithPath: path).appendingPathComponent(name).path
+        if FileManager.default.isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+    }
+    return nil
+}
+
+func slug(from value: String) -> String {
+    let lowered = value.lowercased()
+    var result = ""
+    var lastWasDash = false
+    for scalar in lowered.unicodeScalars {
+        if CharacterSet.alphanumerics.contains(scalar) {
+            result.unicodeScalars.append(scalar)
+            lastWasDash = false
+        } else if !lastWasDash {
+            result.append("-")
+            lastWasDash = true
+        }
+    }
+    let trimmed = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    return trimmed.isEmpty ? "model" : trimmed
 }
 
 enum MenuTab: String, CaseIterable, Identifiable {
@@ -1240,6 +2490,7 @@ struct PhoneTabBar: View {
                     .padding(.vertical, 7)
                     .foregroundStyle(selectedTab == tab ? .blue : .secondary)
                     .background(selectedTab == tab ? Color.blue.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+                    .contentShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .buttonStyle(.plain)
             }
@@ -1618,6 +2869,188 @@ struct CloneSourceControls: View {
     }
 }
 
+struct ShimAppBundleCard: View {
+    var status: ShimAppBundleStatus
+    var isRunning: Bool
+    var refreshAction: () -> Void
+    var rebuildAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: status.stateSymbol)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(status.stateColor)
+                    .frame(width: 24, height: 24)
+                    .background(status.stateColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(status.stateTitle)
+                        .font(.caption.weight(.semibold))
+                    Text(status.stateDetail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button(action: refreshAction) {
+                    Image(systemName: "arrow.clockwise")
+                        .frame(width: 28, height: 26)
+                }
+                .buttonStyle(.plain)
+                .help("Refresh shimmable app status")
+                .disabled(isRunning || status.isChecking)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                ShimAppBundleRow(
+                    title: "Source Codex",
+                    path: status.sourcePath,
+                    version: status.sourceVersion,
+                    hash: status.sourceHash,
+                    exists: status.sourceExists
+                )
+                ShimAppBundleRow(
+                    title: "Shim Copy",
+                    path: status.destinationPath,
+                    version: status.destinationVersion,
+                    hash: status.destinationHash,
+                    exists: status.destinationExists
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Label(status.patched ? "ASAR patch matched" : "ASAR patch missing", systemImage: status.patched ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(status.patched ? .blue : .orange)
+                    Label(status.stale ? "Rebuild needed" : "Current", systemImage: status.stale ? "arrow.triangle.2.circlepath" : "checkmark.circle.fill")
+                        .foregroundStyle(status.stale ? .orange : .blue)
+                }
+                Label("Browser launch mode", systemImage: "network")
+                    .foregroundStyle(.blue)
+            }
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+
+            Text("The copied app is launched as dev flavor with in-app Browser features enabled, avoiding copied-bundle peer signing.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+
+            if let preparedAt = status.preparedAt {
+                Text("Prepared \(preparedAt)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            if let error = status.error {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+            }
+
+            Button(action: rebuildAction) {
+                Label("Repair Shim App", systemImage: "wrench.and.screwdriver")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Rebuild the copied app and refresh shim diagnostics")
+            .disabled(isRunning)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(status.stateColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(status.stateColor.opacity(0.18)))
+    }
+}
+
+struct ShimAppBundleRow: View {
+    var title: String
+    var path: String
+    var version: String
+    var hash: String
+    var exists: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                Text(exists ? version : "missing")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if !hash.isEmpty {
+                    Text(hash)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text(path)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+        }
+    }
+}
+
+struct ProviderLoginRow: View {
+    var provider: ShimLoginProvider
+    var status: ShimProviderStatus
+    var terminalName: String
+    @Binding var isEnabled: Bool
+    var action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: provider.symbol)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(isEnabled ? status.state.color : .secondary)
+                .frame(width: 24, height: 24)
+                .background((isEnabled ? status.state.color : Color.secondary).opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(provider.title)
+                        .font(.caption.weight(.semibold))
+                    Label(isEnabled ? status.state.label : "Disabled", systemImage: isEnabled ? status.state.symbol : "pause.circle")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(isEnabled ? status.state.color : .secondary)
+                        .lineLimit(1)
+                }
+                Text(isEnabled ? status.detail : "Not used by generated shim config")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 6)
+            Toggle("", isOn: $isEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help(isEnabled ? "Disable \(provider.title) for shim" : "Enable \(provider.title) for shim")
+            Button(action: action) {
+                Label("Login", systemImage: "terminal")
+                    .labelStyle(.iconOnly)
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 26, height: 24)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Open \(provider.title) login in \(terminalName)")
+        }
+        .padding(9)
+        .background(.background, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.15)))
+    }
+}
+
 struct SettingsTab: View {
     @EnvironmentObject var model: HomeportModel
     var openConsole: () -> Void
@@ -1641,6 +3074,8 @@ struct SettingsTab: View {
             ))
             Toggle("Install app by default", isOn: .constant(model.state.preferences.installAppByDefault))
                 .disabled(true)
+            SectionLabel("Model Routing")
+            ShimSetupCard()
             SectionLabel("Install")
             AutoUpdaterCard()
             InfoCard(title: "Version", subtitle: "\(AppVersion.version) (\(AppVersion.build)) • \(model.channel.rawValue)")
@@ -1654,6 +3089,68 @@ struct SettingsTab: View {
                 model.resetDefaults()
             }
             .buttonStyle(.bordered)
+        }
+    }
+}
+
+struct ShimSetupCard: View {
+    @EnvironmentObject var model: HomeportModel
+    @State private var executablePath = ""
+    @State private var port = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Machine-wide setup for per-home model routing. Turn routing on per home from that home's detail page.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+
+            ShimAppBundleCard(
+                status: model.shimAppBundleStatus,
+                isRunning: model.isRunningShimCommand,
+                refreshAction: {
+                    model.refreshShimAppBundleStatus(executablePath: model.state.preferences.shimExecutablePath)
+                },
+                rebuildAction: {
+                    model.rebuildShimAppBundle(executablePath: model.state.preferences.shimExecutablePath)
+                }
+            )
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("codex-shim executable")
+                    .font(.caption.weight(.semibold))
+                TextField(model.defaultShimExecutablePath(), text: $executablePath)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .onSubmit { model.setShimExecutablePath(executablePath) }
+                HStack(spacing: 8) {
+                    Text("Port")
+                        .font(.caption.weight(.semibold))
+                    TextField("8765", text: $port)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                        .frame(width: 92)
+                        .onSubmit { model.setShimPort(port) }
+                    Spacer()
+                    Button("Save") {
+                        model.setShimExecutablePath(executablePath)
+                        model.setShimPort(port)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                Text("Leave the executable blank to auto-detect.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        .onAppear {
+            executablePath = model.state.preferences.shimExecutablePath
+            port = model.state.preferences.shimPort
+            model.refreshShimAppBundleStatus(executablePath: model.state.preferences.shimExecutablePath)
         }
     }
 }
@@ -1805,6 +3302,9 @@ struct FocusedHomeView: View {
                 }
             }
 
+            SectionLabel("Model Routing")
+            ModelRoutingPanel(home: home)
+
             SectionLabel("Manage")
             HomeManagePanel(
                 home: home,
@@ -1954,6 +3454,172 @@ struct EditableDetailInfoRow: View {
     }
 }
 
+struct ModelRoutingPanel: View {
+    @EnvironmentObject var model: HomeportModel
+    var home: CodexHome
+    @State private var catalogSummary = "Checking available models…"
+
+    private var isEnabled: Bool {
+        model.routingEnabled(for: home)
+    }
+
+    private var providers: Set<ShimLoginProvider> {
+        model.routingProviders(for: home)
+    }
+
+    private var allowAPIKeyPresets: Bool {
+        model.modelRouting(for: home)?.allowAPIKeyPresets == true
+    }
+
+    private var catalogKey: String {
+        let providerKey = providers.map(\.rawValue).sorted().joined(separator: ",")
+        return "\(isEnabled)|\(providerKey)|\(allowAPIKeyPresets)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: Binding(
+                get: { isEnabled },
+                set: { model.setRoutingEnabled($0, for: home) }
+            )) {
+                HStack(spacing: 10) {
+                    Image(systemName: "point.3.connected.trianglepath.dotted")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(isEnabled ? .indigo : .secondary)
+                        .frame(width: 24, height: 24)
+                        .background((isEnabled ? Color.indigo : Color.secondary).opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Route models through shim")
+                            .font(.caption.weight(.semibold))
+                        Text(isEnabled ? "App and Term launches wire the shim first" : "Launches use this home's normal models")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .toggleStyle(.switch)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .disabled(model.isRunningShimCommand)
+
+            if isEnabled {
+                Divider()
+
+                VStack(spacing: 6) {
+                    ForEach(ShimLoginProvider.allCases) { provider in
+                        ProviderLoginRow(
+                            provider: provider,
+                            status: model.providerStatus(provider, home: home),
+                            terminalName: model.state.preferredTerminal.displayName,
+                            isEnabled: Binding(
+                                get: { providers.contains(provider) },
+                                set: { model.setRoutingProvider(provider, enabled: $0, for: home) }
+                            )
+                        ) {
+                            model.loginWithProviderCLI(provider, home: home)
+                        }
+                        .disabled(model.isRunningShimCommand)
+                    }
+                }
+
+                Toggle(isOn: Binding(
+                    get: { allowAPIKeyPresets },
+                    set: { model.setRoutingAllowsAPIKeyPresets($0, for: home) }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Allow API-key routes")
+                            .font(.caption.weight(.semibold))
+                        Text(allowAPIKeyPresets ? "API-key models are written when credentials are available" : "Off by default; supported passthrough logins can still be discovered")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .toggleStyle(.switch)
+                .disabled(model.isRunningShimCommand)
+
+                Text(catalogSummary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+
+                HStack(spacing: 8) {
+                    Button {
+                        model.openRoutingPicker(for: home)
+                    } label: {
+                        Label("Model Picker", systemImage: "slider.horizontal.3")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button {
+                        model.restartRouting(for: home)
+                    } label: {
+                        Label("Restart", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Restart and rewire the shim for this home")
+                    Button {
+                        model.checkRoutingStatus(for: home)
+                    } label: {
+                        Label("Status", systemImage: "waveform.path.ecg")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Read the running shim daemon state")
+                }
+                .controlSize(.small)
+                .disabled(model.isRunningShimCommand)
+
+                if model.isRunningShimCommand || model.shimStatus != "Ready" {
+                    Text(model.shimStatus)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        .onAppear {
+            if isEnabled {
+                model.refreshShimProviderStatuses(home: home)
+            }
+        }
+        .task(id: catalogKey) {
+            guard isEnabled else { return }
+            catalogSummary = "Checking available models…"
+            let key = catalogKey
+            let enabledProviders = providers
+            let allowKeys = allowAPIKeyPresets
+            let summary = await Task.detached {
+                Self.summaryText(for: buildShimCatalogPlan(
+                    enabledProviders: enabledProviders,
+                    allowAPIKeyPresets: allowKeys,
+                    environment: ProcessInfo.processInfo.environment
+                ))
+            }.value
+            // The detached work outlives .task cancellation; drop results for superseded configs.
+            guard !Task.isCancelled, key == catalogKey else { return }
+            catalogSummary = summary
+        }
+    }
+
+    private nonisolated static func summaryText(for plan: ShimCatalogPlan) -> String {
+        if plan.included.isEmpty {
+            return "Enable at least one provider to publish models."
+        }
+        var text = "Publishes \(plan.included.joined(separator: " + "))"
+        if !plan.skipped.isEmpty {
+            text += " • Skipped: \(plan.skipped.joined(separator: ", "))"
+        }
+        return text
+    }
+}
+
 struct HomeManagePanel: View {
     var home: CodexHome
     var isEditing: Bool
@@ -2064,8 +3730,9 @@ struct HomeListRow: View {
                             Text(home.name)
                                 .font(.caption.weight(.semibold))
                                 .lineLimit(1)
-                            HomeTags(home: home)
-                            HomeAuthTag(home: home)
+                                .layoutPriority(1)
+                            HomeTags(home: home, compact: true)
+                            HomeAuthTag(home: home, compact: true)
                         }
                         Text(subtitle)
                             .font(.caption2)
@@ -2095,27 +3762,52 @@ struct HomeListRow: View {
     }
 }
 
+struct TagChip: View {
+    var label: String
+    var symbol: String
+    var color: Color
+    var compact = false
+    var backgroundOpacity: Double = 0.12
+
+    var body: some View {
+        Group {
+            if compact {
+                Label(label, systemImage: symbol)
+                    .labelStyle(.iconOnly)
+            } else {
+                Label(label, systemImage: symbol)
+                    .labelStyle(.titleAndIcon)
+            }
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(color)
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, compact ? 4 : 5)
+        .padding(.vertical, 2)
+        .background(color.opacity(backgroundOpacity), in: RoundedRectangle(cornerRadius: 5))
+        .help(label)
+    }
+}
+
 struct HomeTags: View {
     var home: CodexHome
+    var compact = false
 
     var body: some View {
         HStack(spacing: 4) {
             ForEach(tags, id: \.label) { tag in
-                Label(tag.label, systemImage: tag.symbol)
-                    .labelStyle(.titleAndIcon)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(tag.color)
-                    .lineLimit(1)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(tag.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+                TagChip(label: tag.label, symbol: tag.symbol, color: tag.color, compact: compact)
             }
         }
     }
 
     private var tags: [(label: String, symbol: String, color: Color)] {
+        var tags: [(label: String, symbol: String, color: Color)] = []
+        if home.modelRouting?.isEnabled == true {
+            tags.append(("Routed", "point.3.connected.trianglepath.dotted", .indigo))
+        }
         if let policies = home.clonePolicies {
-            var tags: [(label: String, symbol: String, color: Color)] = []
             if policies.linkedCategoryCount > 0 {
                 tags.append(("\(policies.linkedCategoryCount) linked", "link", policies.auth == .link ? .orange : .blue))
             }
@@ -2126,28 +3818,29 @@ struct HomeTags: View {
         }
         switch home.cloneMaterialization {
         case .linkSafeCustomizations:
-            return [("Linked", "link", .blue)]
+            tags.append(("Linked", "link", .blue))
         case .linkSafeCustomizationsAndAuth:
-            return [("Auth linked", "key.fill", .orange)]
+            tags.append(("Auth linked", "key.fill", .orange))
         case .copy, nil:
-            return []
+            break
         }
+        return tags
     }
 }
 
 struct HomeAuthTag: View {
     @EnvironmentObject var model: HomeportModel
     var home: CodexHome
+    var compact = false
 
     var body: some View {
-        Label(display.label, systemImage: display.symbol)
-            .labelStyle(.titleAndIcon)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(display.color)
-            .lineLimit(1)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(display.color.opacity(display.backgroundOpacity), in: RoundedRectangle(cornerRadius: 5))
+        TagChip(
+            label: display.label,
+            symbol: display.symbol,
+            color: display.color,
+            compact: compact,
+            backgroundOpacity: display.backgroundOpacity
+        )
     }
 
     private var display: (label: String, symbol: String, color: Color, backgroundOpacity: Double) {
@@ -2297,6 +3990,7 @@ struct NewHomeModeButton: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(isSelected ? Color.blue.opacity(0.08) : Color.clear)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

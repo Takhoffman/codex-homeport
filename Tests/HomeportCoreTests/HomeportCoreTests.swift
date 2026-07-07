@@ -342,6 +342,92 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(command, "cd '/tmp/work space'; CODEX_HOME='/tmp/home port' codex")
     }
 
+    func testShimDesktopEnvironmentEnablesBrowserCompatibleDevLaunch() {
+        let arguments = shimBrowserCompatibleDesktopEnvironmentArguments(environment: [
+            "NO_PROXY": "localhost,127.0.0.1",
+            "no_proxy": ""
+        ])
+
+        XCTAssertEqual(Array(arguments.prefix(2)), ["--env", "BUILD_FLAVOR=dev"])
+        XCTAssertTrue(arguments.contains("--env"))
+        XCTAssertTrue(arguments.contains("CODEX_ELECTRON_DESKTOP_FEATURE_OVERRIDES={\"browserPane\":true,\"inAppBrowserUse\":true,\"inAppBrowserUseAllowed\":true,\"multiBrowserTabs\":true}"))
+        XCTAssertTrue(arguments.contains("NO_PROXY=localhost,127.0.0.1"))
+        XCTAssertFalse(arguments.contains("no_proxy="))
+    }
+
+    func testCachedBrowserSkillPatchAddsStatelessRedditScreenshotSmoke() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex-home", isDirectory: true)
+        let skill = home
+            .appendingPathComponent("plugins/cache/openai-bundled/browser/26.623.101652/skills/control-in-app-browser", isDirectory: true)
+            .appendingPathComponent("SKILL.md")
+        try FileManager.default.createDirectory(at: skill.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        # Browser
+
+        Initialize the runtime once per fresh Node session.
+        """.write(to: skill, atomically: true, encoding: .utf8)
+
+        try patchCachedBrowserSkillForStatelessIAB(in: home)
+        try patchCachedBrowserSkillForStatelessIAB(in: home)
+
+        let patched = try String(contentsOf: skill, encoding: .utf8)
+        XCTAssertEqual(patched.components(separatedBy: statelessIABWorkflowMarker).count, 2)
+        XCTAssertTrue(patched.contains("Do not rely on `browser` or `tab` bindings from an earlier JavaScript call."))
+        XCTAssertTrue(patched.contains("await (await browser.capabilities.get(\"visibility\")).set(true);"))
+        XCTAssertTrue(patched.contains("await tab.goto(\"https://www.reddit.com/\");"))
+        XCTAssertTrue(patched.contains("await nodeRepl.emitImage(await tab.screenshot());"))
+        XCTAssertTrue(patched.contains("browser.user.claimTab(tab)"))
+    }
+
+    func testCachedBrowserSkillPatchUpgradesLegacyStatelessBlock() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex-home", isDirectory: true)
+        let skill = home
+            .appendingPathComponent("plugins/cache/openai-bundled/browser/26.623.101652/skills/control-in-app-browser", isDirectory: true)
+            .appendingPathComponent("SKILL.md")
+        try FileManager.default.createDirectory(at: skill.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        # Browser
+
+        ## Stateless In-App Browser Calls
+
+        const browser = await agent.browsers.get("iab");
+        const tab = await browser.tabs.new();
+        await tab.goto("https://www.reddit.com/");
+        """.write(to: skill, atomically: true, encoding: .utf8)
+
+        try patchCachedBrowserSkillForStatelessIAB(in: home)
+
+        let patched = try String(contentsOf: skill, encoding: .utf8)
+        XCTAssertEqual(patched.components(separatedBy: statelessIABWorkflowMarker).count, 2)
+        XCTAssertTrue(patched.contains("await (await browser.capabilities.get(\"visibility\")).set(true);"))
+        XCTAssertTrue(patched.contains(statelessIABWorkflowEndMarker))
+    }
+
+    func testShimLaunchEnablesBundledBrowserPluginsInHomeConfig() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let config = home.appendingPathComponent("config.toml")
+        try """
+        # >>> codex-shim managed >>>
+        model = "ollama-glm-5-2-cloud"
+        model_provider = "codex_shim"
+        # <<< codex-shim managed <<<
+        """.write(to: config, atomically: true, encoding: .utf8)
+
+        try enableBundledBrowserPluginsForShim(in: home)
+        try enableBundledBrowserPluginsForShim(in: home)
+
+        let text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertTrue(text.contains("model_provider = \"codex_shim\""))
+        XCTAssertEqual(text.components(separatedBy: shimBundledBrowserPluginsBegin).count, 2)
+        XCTAssertTrue(text.contains("[plugins.\"browser@openai-bundled\"]\nenabled = true"))
+        XCTAssertTrue(text.contains("[plugins.\"chrome@openai-bundled\"]\nenabled = true"))
+        XCTAssertTrue(text.contains("[plugins.\"computer-use@openai-bundled\"]\nenabled = true"))
+    }
+
     func testDiagnosticsCountsSessions() throws {
         let root = try makeTempRoot()
         let home = root.appendingPathComponent(".codex")
@@ -635,6 +721,39 @@ final class HomeportCoreTests: XCTestCase {
 
         try service.setHomePinned(id: home.id, pinned: false)
         XCTAssertTrue(try service.loadState().pinnedHomeIDs.isEmpty)
+    }
+
+    func testModelRoutingPersistsPerHome() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let home = try service.createCleanRoom(name: "Routed Home")
+
+        let routing = ModelRoutingConfig(isEnabled: true, providers: ["codex", "ollama"], allowAPIKeyPresets: true)
+        try service.setModelRouting(id: home.id, routing: routing)
+        let saved = try XCTUnwrap(try service.loadState().homes.first(where: { $0.id == home.id }))
+        XCTAssertEqual(saved.modelRouting, routing)
+
+        try service.setModelRouting(id: home.id, routing: nil)
+        let cleared = try XCTUnwrap(try service.loadState().homes.first(where: { $0.id == home.id }))
+        XCTAssertNil(cleared.modelRouting)
+    }
+
+    func testModelRoutingDecodeOlderHomeDefaultsToNil() throws {
+        let data = """
+        {
+          "id": "00000000-0000-0000-0000-000000000002",
+          "name": "Plain Home",
+          "slug": "plain-home",
+          "kind": "cleanRoom",
+          "homePath": "/tmp/home",
+          "profilePath": "/tmp/profile",
+          "isTemporary": false
+        }
+        """.data(using: .utf8)!
+
+        let home = try JSONDecoder().decode(CodexHome.self, from: data)
+
+        XCTAssertNil(home.modelRouting)
     }
 
     func testMainHomeHasStableIDAcrossFreshLoads() throws {

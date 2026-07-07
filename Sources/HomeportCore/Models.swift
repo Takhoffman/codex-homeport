@@ -251,6 +251,35 @@ public struct UpdaterState: Codable, Equatable, Sendable {
     }
 }
 
+public struct ModelRoutingConfig: Codable, Equatable, Sendable {
+    public var isEnabled: Bool
+    public var providers: [String]
+    public var allowAPIKeyPresets: Bool
+
+    public init(
+        isEnabled: Bool = true,
+        providers: [String] = [],
+        allowAPIKeyPresets: Bool = false
+    ) {
+        self.isEnabled = isEnabled
+        self.providers = providers
+        self.allowAPIKeyPresets = allowAPIKeyPresets
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case isEnabled
+        case providers
+        case allowAPIKeyPresets
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        self.providers = try container.decodeIfPresent([String].self, forKey: .providers) ?? []
+        self.allowAPIKeyPresets = try container.decodeIfPresent(Bool.self, forKey: .allowAPIKeyPresets) ?? false
+    }
+}
+
 public enum InstanceStatus: String, Codable, Sendable {
     case running
     case closed
@@ -273,6 +302,7 @@ public struct CodexHome: Codable, Identifiable, Equatable, Sendable {
     public var createdAt: Date
     public var isTemporary: Bool
     public var promotedAt: Date?
+    public var modelRouting: ModelRoutingConfig?
 
     public init(
         id: UUID = UUID(),
@@ -287,7 +317,8 @@ public struct CodexHome: Codable, Identifiable, Equatable, Sendable {
         clonePolicies: ClonePolicies? = nil,
         createdAt: Date = Date(),
         isTemporary: Bool = false,
-        promotedAt: Date? = nil
+        promotedAt: Date? = nil,
+        modelRouting: ModelRoutingConfig? = nil
     ) {
         self.id = id
         self.name = name
@@ -302,6 +333,7 @@ public struct CodexHome: Codable, Identifiable, Equatable, Sendable {
         self.createdAt = createdAt
         self.isTemporary = isTemporary
         self.promotedAt = promotedAt
+        self.modelRouting = modelRouting
     }
 
     enum CodingKeys: String, CodingKey {
@@ -318,6 +350,7 @@ public struct CodexHome: Codable, Identifiable, Equatable, Sendable {
         case createdAt
         case isTemporary
         case promotedAt
+        case modelRouting
     }
 
     public init(from decoder: Decoder) throws {
@@ -340,6 +373,7 @@ public struct CodexHome: Codable, Identifiable, Equatable, Sendable {
         self.createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         self.isTemporary = try container.decodeIfPresent(Bool.self, forKey: .isTemporary) ?? false
         self.promotedAt = try container.decodeIfPresent(Date.self, forKey: .promotedAt)
+        self.modelRouting = try container.decodeIfPresent(ModelRoutingConfig.self, forKey: .modelRouting)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -357,6 +391,7 @@ public struct CodexHome: Codable, Identifiable, Equatable, Sendable {
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(isTemporary, forKey: .isTemporary)
         try container.encodeIfPresent(promotedAt, forKey: .promotedAt)
+        try container.encodeIfPresent(modelRouting, forKey: .modelRouting)
     }
 
     private static func policiesFromLegacyMetadata(
@@ -500,6 +535,8 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
     public var autoUpdateChecksEnabled: Bool
     public var autoInstallUpdates: Bool
     public var updateCheckInterval: UpdateCheckInterval
+    public var shimExecutablePath: String
+    public var shimPort: String
 
     public init(
         defaultLaunchTarget: LaunchTarget = .desktop,
@@ -514,7 +551,9 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         installAppByDefault: Bool = true,
         autoUpdateChecksEnabled: Bool = true,
         autoInstallUpdates: Bool = false,
-        updateCheckInterval: UpdateCheckInterval = .daily
+        updateCheckInterval: UpdateCheckInterval = .daily,
+        shimExecutablePath: String = "",
+        shimPort: String = "8765"
     ) {
         self.defaultLaunchTarget = defaultLaunchTarget
         self.defaultClonePreset = defaultClonePreset
@@ -529,6 +568,8 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         self.autoUpdateChecksEnabled = autoUpdateChecksEnabled
         self.autoInstallUpdates = autoInstallUpdates
         self.updateCheckInterval = updateCheckInterval
+        self.shimExecutablePath = shimExecutablePath
+        self.shimPort = shimPort
     }
 
     enum CodingKeys: String, CodingKey {
@@ -545,6 +586,8 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         case autoUpdateChecksEnabled
         case autoInstallUpdates
         case updateCheckInterval
+        case shimExecutablePath
+        case shimPort
     }
 
     public init(from decoder: Decoder) throws {
@@ -563,6 +606,8 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         self.autoUpdateChecksEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoUpdateChecksEnabled) ?? true
         self.autoInstallUpdates = try container.decodeIfPresent(Bool.self, forKey: .autoInstallUpdates) ?? false
         self.updateCheckInterval = try container.decodeIfPresent(UpdateCheckInterval.self, forKey: .updateCheckInterval) ?? .daily
+        self.shimExecutablePath = try container.decodeIfPresent(String.self, forKey: .shimExecutablePath) ?? ""
+        self.shimPort = try container.decodeIfPresent(String.self, forKey: .shimPort) ?? "8765"
     }
 }
 
