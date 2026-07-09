@@ -1280,7 +1280,7 @@ struct ShimAppBundleStatus {
     var isChecking: Bool
 
     static let checking = ShimAppBundleStatus(
-        sourcePath: "/Applications/Codex.app",
+        sourcePath: HomeportPaths().codexAppBundle.path,
         destinationPath: defaultShimmableCodexAppBundleURL().path,
         sourceExists: false,
         destinationExists: false,
@@ -1350,7 +1350,7 @@ struct ShimAppBundleStatus {
         let destination = json["destination"] as? [String: Any]
         let metadata = json["metadata"] as? [String: Any]
         self.init(
-            sourcePath: json["source_path"] as? String ?? source?["path"] as? String ?? "/Applications/Codex.app",
+            sourcePath: json["source_path"] as? String ?? source?["path"] as? String ?? HomeportPaths().codexAppBundle.path,
             destinationPath: json["destination_path"] as? String ?? destination?["path"] as? String ?? defaultShimmableCodexAppBundleURL().path,
             sourceExists: json["source_exists"] as? Bool ?? false,
             destinationExists: json["destination_exists"] as? Bool ?? false,
@@ -4701,8 +4701,8 @@ struct DiagnosticsPanel: View {
                     Text("\(model.report.mainSessionCount)")
                 }
                 GridRow {
-                    Text("Codex.app").foregroundStyle(.secondary)
-                    Text(model.report.codexAppExists ? "found" : "missing")
+                    Text("Codex Desktop").foregroundStyle(.secondary)
+                    Text(model.report.codexAppPath ?? "missing")
                 }
                 GridRow {
                     Text("codex CLI").foregroundStyle(.secondary)

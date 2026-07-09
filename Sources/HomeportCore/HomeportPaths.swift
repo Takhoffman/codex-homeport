@@ -108,15 +108,51 @@ public struct HomeportPaths: Sendable {
         appSupportDirectory.appendingPathComponent("update.log")
     }
 
-    public var codexAppBundle: URL {
-        URL(fileURLWithPath: "/Applications/Codex.app", isDirectory: true)
+    /// The app identity is stable even though the on-disk bundle and executable names have changed.
+    public static let codexDesktopBundleIdentifier = "com.openai.codex"
+
+    public var codexDesktopApp: CodexDesktopApp? {
+        availableCodexDesktopApps.first
     }
 
+    public var availableCodexDesktopApps: [CodexDesktopApp] {
+        desktopApplicationDirectories
+            .flatMap { applicationDirectory in
+                (try? FileManager.default.contentsOfDirectory(
+                    at: applicationDirectory,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                )) ?? []
+            }
+            .filter { $0.pathExtension == "app" }
+            .compactMap(CodexDesktopApp.init(bundleURL:))
+            .filter { $0.bundleIdentifier == Self.codexDesktopBundleIdentifier }
+    }
+
+    /// Compatibility accessor for callers that only need a bundle URL.
+    public var codexAppBundle: URL {
+        codexDesktopApp?.bundleURL
+            ?? URL(fileURLWithPath: "/Applications/ChatGPT.app", isDirectory: true)
+    }
+
+    /// Compatibility accessor for callers that only need an executable URL.
     public var codexAppExecutable: URL {
-        codexAppBundle
-            .appendingPathComponent("Contents", isDirectory: true)
-            .appendingPathComponent("MacOS", isDirectory: true)
-            .appendingPathComponent("Codex")
+        codexDesktopApp?.executableURL
+            ?? codexAppBundle
+                .appendingPathComponent("Contents", isDirectory: true)
+                .appendingPathComponent("MacOS", isDirectory: true)
+                .appendingPathComponent("ChatGPT")
+    }
+
+    public var desktopAppSearchDescription: String {
+        desktopApplicationDirectories.map(\.path).joined(separator: ", ")
+    }
+
+    private var desktopApplicationDirectories: [URL] {
+        [
+            homeDirectory.appendingPathComponent("Applications", isDirectory: true),
+            URL(fileURLWithPath: "/Applications", isDirectory: true)
+        ]
     }
 
     public var normalCodexProfile: URL {
@@ -128,6 +164,43 @@ public struct HomeportPaths: Sendable {
 
     public var desktopDirectory: URL {
         homeDirectory.appendingPathComponent("Desktop", isDirectory: true)
+    }
+}
+
+public struct CodexDesktopApp: Equatable, Sendable {
+    public let bundleURL: URL
+    public let executableURL: URL
+    public let bundleIdentifier: String
+    public let displayName: String
+
+    public init?(bundleURL: URL) {
+        let infoURL = bundleURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Info.plist")
+        guard
+            let data = try? Data(contentsOf: infoURL),
+            let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+            let values = plist as? [String: Any],
+            let bundleIdentifier = values["CFBundleIdentifier"] as? String,
+            let executableName = values["CFBundleExecutable"] as? String
+        else {
+            return nil
+        }
+
+        let executableURL = bundleURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("MacOS", isDirectory: true)
+            .appendingPathComponent(executableName)
+        guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+            return nil
+        }
+
+        self.bundleURL = bundleURL
+        self.executableURL = executableURL
+        self.bundleIdentifier = bundleIdentifier
+        self.displayName = (values["CFBundleDisplayName"] as? String)
+            ?? (values["CFBundleName"] as? String)
+            ?? bundleURL.deletingPathExtension().lastPathComponent
     }
 }
 

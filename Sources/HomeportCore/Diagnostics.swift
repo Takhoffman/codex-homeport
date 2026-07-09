@@ -13,7 +13,8 @@ public struct Diagnostics {
         var notes: [String] = []
         let globalHome = shellOutput(["/bin/launchctl", "getenv", "CODEX_HOME"]).nilIfEmpty
         let codexPath = findCodexCLI()
-        let appExists = fileManager.isExecutableFile(atPath: paths.codexAppExecutable.path)
+        let desktopApp = paths.codexDesktopApp
+        let appExists = desktopApp != nil
         let sessions = sessionCount(in: paths.mainCodexHome)
         let suspicious = suspiciousLaunchers()
         let authStatus = authStatus(in: paths.mainCodexHome, codexPath: codexPath, includeCLIStatus: true)
@@ -22,7 +23,7 @@ public struct Diagnostics {
             notes.append("GUI CODEX_HOME is set to \(globalHome). Homeport recommends clearing it.")
         }
         if !appExists {
-            notes.append("Codex.app executable was not found at \(paths.codexAppExecutable.path).")
+            notes.append("Codex Desktop was not found. Looked for bundle ID \(HomeportPaths.codexDesktopBundleIdentifier) in \(paths.desktopAppSearchDescription).")
         }
         if codexPath == nil {
             notes.append("The codex CLI was not found on PATH.")
@@ -37,6 +38,8 @@ public struct Diagnostics {
             suspiciousLaunchers: suspicious,
             codexBinaryPath: codexPath,
             codexAppExists: appExists,
+            codexAppPath: desktopApp?.bundleURL.path,
+            codexAppExecutablePath: desktopApp?.executableURL.path,
             authStatus: authStatus,
             notes: notes
         )

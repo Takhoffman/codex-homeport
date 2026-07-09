@@ -235,7 +235,7 @@ homeport uninstall --remove-managed-homes
 `homeport doctor` checks:
 
 - whether `launchctl getenv CODEX_HOME` is set
-- whether Codex.app exists
+- whether a Codex Desktop app is installed (identified by bundle ID, so app renames are supported)
 - whether the `codex` CLI exists
 - how many sessions are in `~/.codex/session_index.jsonl`
 - whether Desktop launcher scripts reference `Deckhand/CodexHome`

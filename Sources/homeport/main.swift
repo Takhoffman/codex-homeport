@@ -97,7 +97,7 @@ func doctor(_ arguments: ArraySlice<String>) throws {
     print("Codex Multihome Doctor")
     print("Main CODEX_HOME: \(service.paths.mainCodexHome.path)")
     print("Main sessions: \(report.mainSessionCount)")
-    print("Codex.app: \(report.codexAppExists ? "found" : "missing")")
+    print("Codex Desktop: \(report.codexAppPath ?? "missing")")
     print("codex CLI: \(report.codexBinaryPath ?? "missing")")
     print("Main auth: \(authStatusLabel(report.authStatus))")
     print("Auth mode: \(report.authStatus.mode ?? "unknown")")
@@ -1087,7 +1087,7 @@ func generalHelp() -> String { """
 Codex Multihome
 
 Safely launch and manage multiple Codex homes without leaking global CODEX_HOME
-state. Multihome can open Codex.app, start terminal Codex sessions, clone your
+state. Multihome can open Codex Desktop, start terminal Codex sessions, clone your
 setup, create temporary homes, and clean up temporary state after review.
 
 Usage:
@@ -1157,7 +1157,7 @@ Options:
 
 Checks:
   - Main ~/.codex session index count
-  - Codex.app executable presence
+  - Codex Desktop app presence
   - codex CLI presence on PATH
   - GUI CODEX_HOME override
   - Desktop launchers that still reference Deckhand/CodexHome
@@ -1176,7 +1176,7 @@ Usage:
   homeport launch [main|temp|SLUG] --target desktop|terminal [options]
 
 Options:
-  --target desktop|terminal     Launch Codex.app or a terminal Codex session.
+  --target desktop|terminal     Launch Codex Desktop or a terminal Codex session.
   --workspace PATH              Working directory for terminal launches.
   --terminal terminal|iTerm     Terminal app to use for terminal launches.
 

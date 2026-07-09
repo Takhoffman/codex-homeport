@@ -40,9 +40,14 @@ public struct Launcher {
         guard fileManager.fileExists(atPath: homeURL.path) else {
             throw HomeportError.homeDoesNotExist(homeURL.path)
         }
-        let bundle = appBundle ?? paths.codexAppBundle
+        let bundle = appBundle ?? paths.codexDesktopApp?.bundleURL
+        guard let bundle else {
+            throw HomeportError.commandFailed(
+                "Codex Desktop was not found. Looked for bundle ID \(HomeportPaths.codexDesktopBundleIdentifier) in \(paths.desktopAppSearchDescription)."
+            )
+        }
         guard fileManager.fileExists(atPath: bundle.path) else {
-            throw HomeportError.commandFailed("Codex app bundle does not exist at \(bundle.path).")
+            throw HomeportError.commandFailed("Codex Desktop app bundle does not exist at \(bundle.path).")
         }
 
         if let profilePath = home.profilePath {

@@ -1082,11 +1082,38 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(HomeportChannel.current(environment: ["HOMEPORT_CHANNEL": "live"], bundle: .main), .live)
     }
 
-    func testCodexAppExecutableIsInsideBundle() {
-        let paths = HomeportPaths()
+    func testCodexDesktopAppDiscoveryUsesBundleIdentityAndExecutableMetadata() throws {
+        let root = try makeTempRoot()
+        let applications = root.appendingPathComponent("Applications", isDirectory: true)
+        let desktopApp = applications.appendingPathComponent("Renamed Codex.app", isDirectory: true)
+        let executable = desktopApp
+            .appendingPathComponent("Contents/MacOS/NotCodex", isDirectory: true)
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\nexit 0\n".write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let info = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict>
+        <key>CFBundleIdentifier</key><string>com.openai.codex</string>
+        <key>CFBundleExecutable</key><string>NotCodex</string>
+        <key>CFBundleDisplayName</key><string>Codex Desktop</string>
+        </dict></plist>
+        """
+        try info.write(
+            to: desktopApp.appendingPathComponent("Contents/Info.plist"),
+            atomically: true,
+            encoding: .utf8
+        )
 
-        XCTAssertEqual(paths.codexAppBundle.path, "/Applications/Codex.app")
-        XCTAssertEqual(paths.codexAppExecutable.path, "/Applications/Codex.app/Contents/MacOS/Codex")
+        let paths = HomeportPaths(homeDirectory: root)
+
+        let discovered = try XCTUnwrap(paths.codexDesktopApp)
+        XCTAssertEqual(discovered.bundleURL.lastPathComponent, "Renamed Codex.app")
+        XCTAssertEqual(discovered.executableURL.lastPathComponent, "NotCodex")
+        XCTAssertEqual(discovered.displayName, "Codex Desktop")
+        XCTAssertEqual(paths.codexAppBundle.lastPathComponent, "Renamed Codex.app")
+        XCTAssertEqual(paths.codexAppExecutable.lastPathComponent, "NotCodex")
     }
 
     private func makeTempRoot() throws -> URL {

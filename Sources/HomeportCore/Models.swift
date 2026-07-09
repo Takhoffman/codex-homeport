@@ -981,6 +981,8 @@ public struct DiagnosticReport: Equatable, Sendable {
     public var suspiciousLaunchers: [String]
     public var codexBinaryPath: String?
     public var codexAppExists: Bool
+    public var codexAppPath: String?
+    public var codexAppExecutablePath: String?
     public var authStatus: CodexAuthStatus
     public var notes: [String]
 
@@ -990,6 +992,8 @@ public struct DiagnosticReport: Equatable, Sendable {
         suspiciousLaunchers: [String],
         codexBinaryPath: String?,
         codexAppExists: Bool,
+        codexAppPath: String? = nil,
+        codexAppExecutablePath: String? = nil,
         authStatus: CodexAuthStatus = CodexAuthStatus(),
         notes: [String]
     ) {
@@ -998,6 +1002,8 @@ public struct DiagnosticReport: Equatable, Sendable {
         self.suspiciousLaunchers = suspiciousLaunchers
         self.codexBinaryPath = codexBinaryPath
         self.codexAppExists = codexAppExists
+        self.codexAppPath = codexAppPath
+        self.codexAppExecutablePath = codexAppExecutablePath
         self.authStatus = authStatus
         self.notes = notes
     }
