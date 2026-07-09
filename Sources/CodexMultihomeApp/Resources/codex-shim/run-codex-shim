@@ -1,0 +1,18 @@
+#!/bin/sh
+# Launcher for Codex Multihome's vendored codex-shim runtime.
+set -eu
+
+RESOURCE_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+case "$(uname -m)" in
+    arm64) platform="aarch64" ;;
+    x86_64) platform="x86_64" ;;
+    *) echo "Unsupported macOS architecture for Codex Multihome's bundled shim: $(uname -m)" >&2; exit 1 ;;
+esac
+PYTHON="$RESOURCE_DIR/runtime/$platform/python/bin/python3"
+
+if [ ! -x "$PYTHON" ]; then
+    echo "The bundled model-routing runtime is missing. Reinstall Codex Multihome to restore it, or set a Shim executable override in Settings." >&2
+    exit 1
+fi
+
+exec env PYTHONPATH="$RESOURCE_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -m codex_shim.cli "$@"

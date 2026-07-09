@@ -1,6 +1,6 @@
 {
   "name": "codex-multihome",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "A macOS menu bar launcher and hygiene tool for managing multiple Codex homes.",
   "author": "Tak Hoffman",
   "license": "MIT",
@@ -26,6 +26,7 @@
   },
   "scripts": {
     "postinstall": "node npm/postinstall.js",
+    "prepack": "sh scripts/prepare-shim-runtime.sh --all",
     "build": "swift build -c release --product homeport && swift build -c release --product CodexMultihomeApp",
     "release:check": "swift test && npm pack --dry-run",
     "test": "swift test"
@@ -42,6 +43,7 @@
     "README.md",
     "SECURITY.md",
     "releases",
+    "scripts",
     "Sources",
     "Tests",
     "docs",

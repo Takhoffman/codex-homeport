@@ -87,6 +87,17 @@ The menu keeps pinned homes and recent launches close at hand:
 - Relaunch recent desktop or terminal sessions from the menu or Console.
 - Recents are based on Multihome launch history and survive app restarts.
 
+## Model Routing Shim
+
+Model routing uses a cleaned `codex-shim` runtime bundled inside the Multihome
+app; it does not require a separate checkout or globally installed
+`codex-shim` executable. Published packages embed checksum-verified standalone
+CPython runtimes for Apple Silicon and Intel Macs plus pinned `aiohttp`
+dependencies. Routing then runs offline: it needs neither a system Python nor
+network access. Source checkouts prepare the host runtime during installation.
+Settings keeps an optional Shim executable override for an intentionally
+managed external runtime.
+
 ## Install And Update
 
 The recommended Mac install path is npm. The npm package builds the Swift CLI

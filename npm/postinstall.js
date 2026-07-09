@@ -9,6 +9,16 @@ if (process.platform !== "darwin") {
 }
 
 const root = path.resolve(__dirname, "..");
+const runtime = spawnSync("sh", [path.join(root, "scripts", "prepare-shim-runtime.sh")], {
+  stdio: "inherit"
+});
+
+if (runtime.error || runtime.status !== 0) {
+  console.error("Could not prepare Codex Multihome's bundled model-routing runtime.");
+  if (runtime.error) console.error(runtime.error.message);
+  process.exit(runtime.status ?? 1);
+}
+
 const result = spawnSync("swift", ["build", "--package-path", root, "-c", "release", "--product", "homeport"], {
   stdio: "inherit"
 });

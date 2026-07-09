@@ -349,6 +349,7 @@ func install(_ arguments: [String]) throws {
     let channel = try channel(from: arguments)
 
     print("Installing \(channel.appName) \(AppVersion.version) from \(repo.path)")
+    try runProcess("/bin/sh", [repo.appendingPathComponent("scripts/prepare-shim-runtime.sh").path])
     try runProcess("swift", ["build", "--package-path", repo.path, "-c", "release", "--product", "homeport"])
     try FileManager.default.createDirectory(at: installDirectory, withIntermediateDirectories: true)
 
@@ -410,6 +411,25 @@ func buildAppBundle(repo: URL, channel: HomeportChannel) throws -> URL {
     }
     try FileManager.default.copyItem(at: builtApp, to: executable)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+    let buildRoot = repo.appendingPathComponent(".build", isDirectory: true)
+    let builtResources = FileManager.default
+        .enumerator(at: buildRoot, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])?
+        .compactMap { $0 as? URL }
+        .first { url in
+            url.lastPathComponent.hasSuffix("_CodexMultihomeApp.bundle")
+                && url.path.contains("/release/")
+        }
+    guard let builtResources else {
+        throw HomeportError.commandFailed("Bundled shim resources were not produced by the Swift build.")
+    }
+    let installedResources = app
+        .appendingPathComponent("Contents/Resources", isDirectory: true)
+        .appendingPathComponent(builtResources.lastPathComponent, isDirectory: true)
+    if FileManager.default.fileExists(atPath: installedResources.path) {
+        try trash(installedResources)
+    }
+    try FileManager.default.copyItem(at: builtResources, to: installedResources)
 
     let plist = """
     <?xml version="1.0" encoding="UTF-8"?>

@@ -257,6 +257,31 @@ public func suggestedHomeName(fromHomePath path: String) -> String? {
     return lastComponent.isEmpty ? nil : lastComponent
 }
 
+/// Selects the shim executable without making an installation-specific path part
+/// of persisted state. An explicit user override always wins; the app's bundled
+/// launcher is otherwise preferred over legacy standalone installations.
+public func resolveShimExecutablePath(
+    overridePath: String,
+    bundledPath: String?,
+    externalCandidates: [String],
+    fileManager: FileManager = .default
+) -> String {
+    let trimmedOverride = overridePath.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmedOverride.isEmpty {
+        return NSString(string: trimmedOverride).expandingTildeInPath
+    }
+
+    if let bundledPath, fileManager.isExecutableFile(atPath: bundledPath) {
+        return bundledPath
+    }
+
+    if let external = externalCandidates.first(where: { fileManager.isExecutableFile(atPath: $0) }) {
+        return external
+    }
+
+    return bundledPath ?? externalCandidates.first ?? "codex-shim"
+}
+
 public func timestampSlug(prefix: String, date: Date = Date()) -> String {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")

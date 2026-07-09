@@ -2,6 +2,7 @@
 .swiftpm/
 DerivedData/
 dist/
+Sources/CodexMultihomeApp/Resources/codex-shim/runtime/
 *.xcodeproj
 *.xcworkspace
 .DS_Store
