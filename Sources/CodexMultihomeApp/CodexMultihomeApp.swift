@@ -823,14 +823,6 @@ final class HomeportModel: ObservableObject {
         saveModelRouting(routing, for: home, statusMessage: nil)
     }
 
-    func setRoutingAllowsAPIKeyPresets(_ allowed: Bool, for home: CodexHome) {
-        guard var routing = modelRouting(for: home) else {
-            return
-        }
-        routing.allowAPIKeyPresets = allowed
-        saveModelRouting(routing, for: home, statusMessage: nil)
-    }
-
     private func saveModelRouting(_ routing: ModelRoutingConfig, for home: CodexHome, statusMessage: String?) {
         do {
             try service.setModelRouting(id: home.id, routing: routing)
@@ -897,16 +889,14 @@ final class HomeportModel: ObservableObject {
             status = shimStatus
             return
         }
-        let allowAPIKeyPresets = modelRouting(for: home)?.allowAPIKeyPresets == true
         beginShimOperation()
         shimStatus = "Publishing model catalog for \(home.name)"
         Task {
-            let result = await Task.detached { [home, providers, allowAPIKeyPresets] in
+            let result = await Task.detached { [home, providers] in
                 Result {
                     try buildAndWriteShimCatalog(
                         home: home,
                         enabledProviders: providers,
-                        allowAPIKeyPresets: allowAPIKeyPresets,
                         environment: ProcessInfo.processInfo.environment
                     )
                 }
@@ -914,7 +904,6 @@ final class HomeportModel: ObservableObject {
             await MainActor.run {
                 endShimOperation()
                 let configChanged = routingProviders(for: home) != providers
-                    || (modelRouting(for: home)?.allowAPIKeyPresets == true) != allowAPIKeyPresets
                 if configChanged, attempt < 3 {
                     withRoutingCatalog(for: home, attempt: attempt + 1, then: continuation)
                     return
@@ -993,8 +982,6 @@ final class HomeportModel: ObservableObject {
         Task {
             let statuses = await Task.detached { [environment] in
                 [
-                    ShimLoginProvider.grok: grokProviderStatus(environment: environment),
-                    ShimLoginProvider.claude: claudeProviderStatus(environment: environment),
                     ShimLoginProvider.ollama: ollamaProviderStatus(environment: environment),
                     ShimLoginProvider.cursor: cursorProviderStatus(environment: environment)
                 ]
@@ -1165,8 +1152,6 @@ enum CodexShimCommand: String, CaseIterable, Identifiable {
 
 enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
     case codex
-    case grok
-    case claude
     case ollama
     case cursor
 
@@ -1179,8 +1164,6 @@ enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .codex: "Codex"
-        case .grok: "Grok"
-        case .claude: "Claude"
         case .ollama: "Ollama"
         case .cursor: "Cursor"
         }
@@ -1189,8 +1172,6 @@ enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
     var symbol: String {
         switch self {
         case .codex: "key.fill"
-        case .grok: "sparkles"
-        case .claude: "brain.head.profile"
         case .ollama: "cloud.fill"
         case .cursor: "cursorarrow.click.2"
         }
@@ -1199,8 +1180,6 @@ enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
     var detail: String {
         switch self {
         case .codex: "Scoped to selected CODEX_HOME"
-        case .grok: "Uses XAI_API_KEY via xAI API"
-        case .claude: "Uses Claude Code session"
         case .ollama: "Uses Ollama Cloud sign-in"
         case .cursor: "Uses cursor-agent session"
         }
@@ -1211,10 +1190,6 @@ enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
         case .codex:
             let homePath = home?.homePath ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
             return "CODEX_HOME=\(shellQuote(homePath)) codex login"
-        case .grok:
-            return "PATH=\(shellQuote(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".grok/bin").path)):$PATH grok login"
-        case .claude:
-            return "claude auth login"
         case .ollama:
             return "ollama signin"
         case .cursor:
@@ -1467,14 +1442,12 @@ func shimCatalogSettingsURL(for home: CodexHome) -> URL {
 func buildAndWriteShimCatalog(
     home: CodexHome,
     enabledProviders: Set<ShimLoginProvider>,
-    allowAPIKeyPresets: Bool,
     environment: [String: String]
 ) throws -> (path: String, defaultModelSlug: String?, included: [String]) {
     let settingsURL = shimCatalogSettingsURL(for: home)
     try FileManager.default.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     let plan = buildShimCatalogPlan(
         enabledProviders: enabledProviders,
-        allowAPIKeyPresets: allowAPIKeyPresets,
         environment: environment
     )
     let data = try JSONSerialization.data(withJSONObject: plan.payload, options: [.prettyPrinted, .sortedKeys])
@@ -1488,7 +1461,7 @@ func defaultShimmableCodexAppBundleURL() -> URL {
         .appendingPathComponent("Codex Shim.app", isDirectory: true)
 }
 
-func buildShimCatalogPlan(enabledProviders: Set<ShimLoginProvider>, allowAPIKeyPresets: Bool, environment: [String: String]) -> ShimCatalogPlan {
+func buildShimCatalogPlan(enabledProviders: Set<ShimLoginProvider>, environment: [String: String]) -> ShimCatalogPlan {
     var models: [[String: Any]] = []
     var included: [String] = []
     var skipped: [String] = []
@@ -1511,25 +1484,6 @@ func buildShimCatalogPlan(enabledProviders: Set<ShimLoginProvider>, allowAPIKeyP
         skipped.append("Ollama disabled")
     }
 
-    if enabledProviders.contains(.grok) {
-        if allowAPIKeyPresets, !(environment["XAI_API_KEY"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            models.append(contentsOf: grokAPIModelPayloads())
-            included.append("Grok API")
-        } else if allowAPIKeyPresets {
-            skipped.append("Grok API-key routes missing XAI_API_KEY")
-        } else {
-            skipped.append("Grok API-key routes disabled")
-        }
-    } else {
-        skipped.append("Grok disabled")
-    }
-
-    if enabledProviders.contains(.claude) {
-        skipped.append("Claude CLI passthrough gated until tool bridge is verified")
-    } else {
-        skipped.append("Claude disabled")
-    }
-
     if enabledProviders.contains(.cursor) {
         included.append("Cursor")
     } else {
@@ -1546,8 +1500,6 @@ func buildShimCatalogPlan(enabledProviders: Set<ShimLoginProvider>, allowAPIKeyP
             "notes": [
                 "Provider toggles are scoped to this Codex home.",
                 "ChatGPT/Codex and Cursor are discovered by codex-shim from supported login state.",
-                "Grok is written only when API-key routes are enabled and XAI_API_KEY is available.",
-                "Claude CLI login is reported here, but not written to the catalog until codex-shim has a verified tool bridge.",
                 "Included: \(included.joined(separator: ", "))",
                 "Skipped: \(skipped.joined(separator: ", "))"
             ]
@@ -1635,48 +1587,6 @@ func expandUserPath(_ path: String) -> String {
             .path
     }
     return path
-}
-
-func grokProviderStatus(environment: [String: String]) -> ShimProviderStatus {
-    guard let executable = findExecutable("grok", extraPaths: [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".grok/bin").path]) else {
-        return ShimProviderStatus(state: .missing, detail: "Grok CLI not found")
-    }
-    let result = runCommand(executable: executable, arguments: ["models"], environment: environment)
-    guard result.succeeded else {
-        return ShimProviderStatus(state: .warning, detail: "Grok CLI found; models check failed")
-    }
-    let output = result.combinedOutput
-    let models = output
-        .split(separator: "\n")
-        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { $0.hasPrefix("- ") || $0.hasPrefix("* ") }
-    let hasAPIKey = !(environment["XAI_API_KEY"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    if hasAPIKey {
-        return ShimProviderStatus(state: .ready, detail: "XAI_API_KEY ready; \(models.count) Grok API routes visible")
-    }
-    return ShimProviderStatus(state: .warning, detail: "Grok CLI works; set XAI_API_KEY for shim API routes")
-}
-
-func claudeProviderStatus(environment: [String: String]) -> ShimProviderStatus {
-    guard let executable = findExecutable("claude", extraPaths: [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path]) else {
-        return ShimProviderStatus(state: .missing, detail: "Claude CLI not found")
-    }
-    let result = runCommand(executable: executable, arguments: ["auth", "status"], environment: environment)
-    guard result.succeeded else {
-        return ShimProviderStatus(state: .warning, detail: "Claude CLI found; auth status failed")
-    }
-    guard let data = result.output.data(using: .utf8),
-          let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        let detail = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ShimProviderStatus(state: .warning, detail: detail.isEmpty ? "Claude auth status unknown" : detail)
-    }
-    let loggedIn = payload["loggedIn"] as? Bool == true
-    let authMethod = (payload["authMethod"] as? String) ?? "unknown auth"
-    let subscription = (payload["subscriptionType"] as? String) ?? "unknown plan"
-    if loggedIn {
-        return ShimProviderStatus(state: .ready, detail: "Claude \(subscription) via \(authMethod); tool bridge gated")
-    }
-    return ShimProviderStatus(state: .missing, detail: "Run Claude auth login")
 }
 
 func ollamaProviderStatus(environment: [String: String]) -> ShimProviderStatus {
@@ -1794,22 +1704,6 @@ func ollamaDisplayName(for model: String) -> String {
             return text.prefix(1).uppercased() + text.dropFirst()
         }
         .joined(separator: " ")
-}
-
-func grokAPIModelPayloads() -> [[String: Any]] {
-    [
-        [
-            "slug": "grok-build",
-            "model": "grok-build-0.1",
-            "display_name": "Grok Build",
-            "provider": "generic-chat-completion-api",
-            "base_url": "https://api.x.ai/v1",
-            "api_key_env": "XAI_API_KEY",
-            "max_context_limit": 256000,
-            "reasoning_levels": ["low", "medium", "high"],
-            "default_reasoning_level": "medium"
-        ]
-    ]
 }
 
 func cursorProviderStatus(environment: [String: String]) -> ShimProviderStatus {
@@ -3568,13 +3462,9 @@ struct ModelRoutingPanel: View {
         model.routingProviders(for: home)
     }
 
-    private var allowAPIKeyPresets: Bool {
-        model.modelRouting(for: home)?.allowAPIKeyPresets == true
-    }
-
     private var catalogKey: String {
         let providerKey = providers.map(\.rawValue).sorted().joined(separator: ",")
-        return "\(isEnabled)|\(providerKey)|\(allowAPIKeyPresets)"
+        return "\(isEnabled)|\(providerKey)"
     }
 
     var body: some View {
@@ -3624,22 +3514,6 @@ struct ModelRoutingPanel: View {
                         .disabled(model.isRunningShimCommand)
                     }
                 }
-
-                Toggle(isOn: Binding(
-                    get: { allowAPIKeyPresets },
-                    set: { model.setRoutingAllowsAPIKeyPresets($0, for: home) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Allow API-key routes")
-                            .font(.caption.weight(.semibold))
-                        Text(allowAPIKeyPresets ? "API-key models are written when credentials are available" : "Off by default; supported passthrough logins can still be discovered")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
-                .toggleStyle(.switch)
-                .disabled(model.isRunningShimCommand)
 
                 Text(catalogSummary)
                     .font(.caption2)
@@ -3695,11 +3569,9 @@ struct ModelRoutingPanel: View {
             catalogSummary = "Checking available models…"
             let key = catalogKey
             let enabledProviders = providers
-            let allowKeys = allowAPIKeyPresets
             let summary = await Task.detached {
                 Self.summaryText(for: buildShimCatalogPlan(
                     enabledProviders: enabledProviders,
-                    allowAPIKeyPresets: allowKeys,
                     environment: ProcessInfo.processInfo.environment
                 ))
             }.value
