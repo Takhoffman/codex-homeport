@@ -2,7 +2,14 @@ import Foundation
 import HomeportCore
 
 let arguments = Array(CommandLine.arguments.dropFirst())
-let cliChannel = HomeportChannel.current()
+let cliChannel: HomeportChannel = {
+    do {
+        return try channel(from: arguments)
+    } catch {
+        fputs("homeport: \(error.localizedDescription)\n", stderr)
+        exit(1)
+    }
+}()
 let service = HomeportService(paths: HomeportPaths(channel: cliChannel))
 
 do {
