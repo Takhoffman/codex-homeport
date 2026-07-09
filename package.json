@@ -26,6 +26,7 @@
   },
   "scripts": {
     "postinstall": "node npm/postinstall.js",
+    "prepack": "sh scripts/prepare-shim-runtime.sh --all",
     "build": "swift build -c release --product homeport && swift build -c release --product CodexMultihomeApp",
     "release:check": "swift test && npm pack --dry-run",
     "test": "swift test"
@@ -42,6 +43,7 @@
     "README.md",
     "SECURITY.md",
     "releases",
+    "scripts",
     "Sources",
     "Tests",
     "docs",

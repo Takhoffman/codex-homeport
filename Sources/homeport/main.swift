@@ -349,6 +349,7 @@ func install(_ arguments: [String]) throws {
     let channel = try channel(from: arguments)
 
     print("Installing \(channel.appName) \(AppVersion.version) from \(repo.path)")
+    try runProcess("/bin/sh", [repo.appendingPathComponent("scripts/prepare-shim-runtime.sh").path])
     try runProcess("swift", ["build", "--package-path", repo.path, "-c", "release", "--product", "homeport"])
     try FileManager.default.createDirectory(at: installDirectory, withIntermediateDirectories: true)
 

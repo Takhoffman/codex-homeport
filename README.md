@@ -91,11 +91,12 @@ The menu keeps pinned homes and recent launches close at hand:
 
 Model routing uses a cleaned `codex-shim` runtime bundled inside the Multihome
 app; it does not require a separate checkout or globally installed
-`codex-shim` executable. On its first routing command, the bundled launcher
-creates `~/Library/Application Support/CodexMultihome/codex-shim-runtime/venv`
-and installs its pinned `aiohttp` dependencies. This requires Python 3.11+ and
-network access for that first bootstrap. Settings keeps an optional Shim
-executable override for an intentionally managed external runtime.
+`codex-shim` executable. Published packages embed checksum-verified standalone
+CPython runtimes for Apple Silicon and Intel Macs plus pinned `aiohttp`
+dependencies. Routing then runs offline: it needs neither a system Python nor
+network access. Source checkouts prepare the host runtime during installation.
+Settings keeps an optional Shim executable override for an intentionally
+managed external runtime.
 
 ## Install And Update
 
