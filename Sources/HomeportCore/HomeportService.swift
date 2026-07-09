@@ -262,7 +262,14 @@ public final class HomeportService: @unchecked Sendable {
             home = try resolveHome(selector: selector, in: state)
         }
         let selectedTerminal = terminal ?? state.preferredTerminal
-        let pid = try launcher.launch(home: home, target: target, workspace: workspace, terminal: selectedTerminal, appBundle: appBundle)
+        let pid = try launcher.launch(
+            home: home,
+            target: target,
+            workspace: workspace,
+            terminal: selectedTerminal,
+            appBundle: appBundle,
+            browserUseLocalTestingMode: state.preferences.browserUseLocalTestingMode
+        )
         let launchedProfilePath = target == .desktop && appBundle != nil
             ? home.profilePath.map { "\($0)-shim" }
             : home.profilePath

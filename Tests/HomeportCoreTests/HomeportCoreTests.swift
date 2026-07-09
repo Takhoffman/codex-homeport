@@ -342,6 +342,37 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(command, "cd '/tmp/work space'; CODEX_HOME='/tmp/home port' codex")
     }
 
+    func testTerminalCommandCanEnableBrowserUseLocalTestingMode() {
+        let home = CodexHome(
+            name: "Temp",
+            slug: "temp",
+            kind: .temporary,
+            homePath: "/tmp/home port",
+            profilePath: "/tmp/profile"
+        )
+        let command = Launcher().terminalShellCommand(
+            home: home,
+            workspace: "/tmp/work space",
+            browserUseLocalTestingMode: true
+        )
+        XCTAssertEqual(
+            command,
+            "cd '/tmp/work space'; CODEX_HOME='/tmp/home port' BROWSER_USE_SECURITY_MODE=disabled-for-local-testing codex"
+        )
+    }
+
+    func testBrowserUseLocalTestingModeEnvironmentHelper() {
+        var environment = ["BROWSER_USE_SECURITY_MODE": "existing", "OTHER": "1"]
+
+        applyBrowserUseLocalTestingMode(true, to: &environment)
+        XCTAssertEqual(environment["BROWSER_USE_SECURITY_MODE"], "disabled-for-local-testing")
+        XCTAssertEqual(environment["OTHER"], "1")
+
+        applyBrowserUseLocalTestingMode(false, to: &environment)
+        XCTAssertNil(environment["BROWSER_USE_SECURITY_MODE"])
+        XCTAssertEqual(environment["OTHER"], "1")
+    }
+
     func testShimDesktopEnvironmentEnablesBrowserCompatibleDevLaunch() {
         let arguments = shimBrowserCompatibleDesktopEnvironmentArguments(environment: [
             "NO_PROXY": "localhost,127.0.0.1",
@@ -869,6 +900,7 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(preferences.cloneSourceSelector, "main")
         XCTAssertEqual(preferences.clonePolicies, ClonePolicies(options: preferences.cloneOptions, materialization: .copy))
         XCTAssertTrue(preferences.allowForbiddenComputerUseTargetsByDefault)
+        XCTAssertFalse(preferences.browserUseLocalTestingMode)
         XCTAssertNil(preferences.lastClonePolicies)
     }
 

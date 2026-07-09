@@ -576,6 +576,14 @@ func configure(_ arguments: [String]) throws {
         print("Allow forbidden Computer Use targets: \(isEnabled)")
     }
 
+    if let localTestingMode = option(arguments, "--browser-use-local-testing") {
+        let isEnabled = try strictBoolValue(localTestingMode, optionName: "--browser-use-local-testing")
+        var state = try service.loadState()
+        state.preferences.browserUseLocalTestingMode = isEnabled
+        try service.saveState(state)
+        print("Browser Use local testing mode: \(isEnabled)")
+    }
+
     if let updateChecks = option(arguments, "--update-checks") {
         var state = try service.loadState()
         state.preferences.autoUpdateChecksEnabled = try strictBoolValue(updateChecks, optionName: "--update-checks")
@@ -631,6 +639,7 @@ func configure(_ arguments: [String]) throws {
         print("Allow forbidden Computer Use targets by default: \(state.preferences.allowForbiddenComputerUseTargetsByDefault)")
         let computerUseDefault = ComputerUseDefaults.readAllowForbiddenTargets().map(String.init(describing:)) ?? "unset"
         print("Current macOS Computer Use target default: \(computerUseDefault)")
+        print("Browser Use local testing mode: \(state.preferences.browserUseLocalTestingMode)")
         print("Update checks enabled: \(state.preferences.autoUpdateChecksEnabled)")
         print("Update interval: \(state.preferences.updateCheckInterval.rawValue)")
         print("Auto-install updates: \(state.preferences.autoInstallUpdates)")
@@ -1487,6 +1496,7 @@ Options:
   --install-app on|off                  Default whether onboarding installs app.
   --allow-forbidden-computer-use-targets on|off
                                         Set Apple's global Computer Use target default.
+  --browser-use-local-testing on|off    Launch Codex with BROWSER_USE_SECURITY_MODE=disabled-for-local-testing.
   --update-checks on|off                Enable proactive npm update checks.
   --update-interval daily|weekly        How often the app checks for updates.
   --auto-install-updates on|off         Install available updates without prompting.
@@ -1506,6 +1516,7 @@ Examples:
   homeport configure --update-checks on --update-interval weekly
   homeport configure --auto-install-updates off
   homeport configure --allow-forbidden-computer-use-targets on
+  homeport configure --browser-use-local-testing on
   homeport configure --reset
   homeport configure --autostart on
 """ }

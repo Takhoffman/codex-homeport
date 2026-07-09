@@ -194,6 +194,7 @@ homeport configure --clone-include config,skills,plugins
 homeport configure --clone-exclude auth,sessions
 homeport configure --temporary on
 homeport configure --allow-forbidden-computer-use-targets on
+homeport configure --browser-use-local-testing on
 homeport configure --update-checks on
 homeport configure --update-interval weekly
 homeport configure --auto-install-updates off

@@ -15,17 +15,27 @@ public struct Launcher {
         target: LaunchTarget,
         workspace: String?,
         terminal: TerminalApp,
-        appBundle: URL? = nil
+        appBundle: URL? = nil,
+        browserUseLocalTestingMode: Bool = false
     ) throws -> Int32? {
         switch target {
         case .desktop:
-            return try launchDesktop(home: home, appBundle: appBundle)
+            return try launchDesktop(
+                home: home,
+                appBundle: appBundle,
+                browserUseLocalTestingMode: browserUseLocalTestingMode
+            )
         case .terminal:
-            return try launchTerminal(home: home, workspace: workspace, terminal: terminal)
+            return try launchTerminal(
+                home: home,
+                workspace: workspace,
+                terminal: terminal,
+                browserUseLocalTestingMode: browserUseLocalTestingMode
+            )
         }
     }
 
-    private func launchDesktop(home: CodexHome, appBundle: URL?) throws -> Int32? {
+    private func launchDesktop(home: CodexHome, appBundle: URL?, browserUseLocalTestingMode: Bool) throws -> Int32? {
         let homeURL = URL(fileURLWithPath: home.homePath)
         guard fileManager.fileExists(atPath: homeURL.path) else {
             throw HomeportError.homeDoesNotExist(homeURL.path)
@@ -49,10 +59,16 @@ public struct Launcher {
             try enableBundledBrowserPluginsForShim(in: homeURL)
             try patchCachedBrowserSkillForStatelessIAB(in: homeURL, fileManager: fileManager)
             terminateCodexProcesses(usingProfilePath: shimProfilePath)
-            return try launchCustomDesktopBundle(bundle: bundle, home: home, profilePath: shimProfilePath)
+            return try launchCustomDesktopBundle(
+                bundle: bundle,
+                home: home,
+                profilePath: shimProfilePath,
+                browserUseLocalTestingMode: browserUseLocalTestingMode
+            )
         }
         var environment = ProcessInfo.processInfo.environment
         environment["CODEX_HOME"] = home.homePath
+        applyBrowserUseLocalTestingMode(browserUseLocalTestingMode, to: &environment)
 
         let app = try NSWorkspace.shared.launchApplication(
             at: bundle,
@@ -66,9 +82,17 @@ public struct Launcher {
         return app.processIdentifier
     }
 
-    private func launchCustomDesktopBundle(bundle: URL, home: CodexHome, profilePath: String) throws -> Int32? {
+    private func launchCustomDesktopBundle(
+        bundle: URL,
+        home: CodexHome,
+        profilePath: String,
+        browserUseLocalTestingMode: Bool
+    ) throws -> Int32? {
         var arguments = ["-n", "-F", bundle.path, "--env", "CODEX_HOME=\(home.homePath)"]
         arguments += shimBrowserCompatibleDesktopEnvironmentArguments(environment: ProcessInfo.processInfo.environment)
+        if browserUseLocalTestingMode {
+            arguments += ["--env", "BROWSER_USE_SECURITY_MODE=disabled-for-local-testing"]
+        }
         arguments += ["--args", "--user-data-dir=\(profilePath)"]
 
         let process = Process()
@@ -150,9 +174,14 @@ public struct Launcher {
     private func launchTerminal(
         home: CodexHome,
         workspace: String?,
-        terminal: TerminalApp
+        terminal: TerminalApp,
+        browserUseLocalTestingMode: Bool
     ) throws -> Int32? {
-        let command = terminalShellCommand(home: home, workspace: workspace)
+        let command = terminalShellCommand(
+            home: home,
+            workspace: workspace,
+            browserUseLocalTestingMode: browserUseLocalTestingMode
+        )
         let script = terminalAppleScript(command: command, terminal: terminal)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -165,10 +194,17 @@ public struct Launcher {
         return nil
     }
 
-    public func terminalShellCommand(home: CodexHome, workspace: String?) -> String {
+    public func terminalShellCommand(
+        home: CodexHome,
+        workspace: String?,
+        browserUseLocalTestingMode: Bool = false
+    ) -> String {
         let workspacePath = workspace?.isEmpty == false ? workspace! : fileManager.currentDirectoryPath
+        let browserMode = browserUseLocalTestingMode
+            ? " BROWSER_USE_SECURITY_MODE=disabled-for-local-testing"
+            : ""
         return """
-        cd \(shellQuote(workspacePath)); CODEX_HOME=\(shellQuote(home.homePath)) codex
+        cd \(shellQuote(workspacePath)); CODEX_HOME=\(shellQuote(home.homePath))\(browserMode) codex
         """
     }
 
@@ -193,6 +229,14 @@ public struct Launcher {
             end tell
             """
         }
+    }
+}
+
+func applyBrowserUseLocalTestingMode(_ isEnabled: Bool, to environment: inout [String: String]) {
+    if isEnabled {
+        environment["BROWSER_USE_SECURITY_MODE"] = "disabled-for-local-testing"
+    } else {
+        environment.removeValue(forKey: "BROWSER_USE_SECURITY_MODE")
     }
 }
 
