@@ -395,6 +395,17 @@ final class HomeportModel: ObservableObject {
         }
     }
 
+    func setBrowserUseLocalTestingMode(_ value: Bool) {
+        do {
+            var next = try service.loadState()
+            next.preferences.browserUseLocalTestingMode = value
+            try service.saveState(next)
+            refresh()
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
     func setAutoUpdateChecksEnabled(_ value: Bool) {
         do {
             var next = try service.loadState()
@@ -1989,6 +2000,12 @@ struct HomeportMenuView: View {
                         .padding(.bottom, 8)
                 }
 
+                if focusedHome == nil {
+                    LaunchModeStrip()
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
+                }
+
                 ScrollView {
                     Group {
                         if let focusedHome {
@@ -2624,7 +2641,7 @@ struct AddFavoriteSheet: View {
                         dismiss()
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: icon(for: home))
+                            Image(systemName: homeKindIcon(for: home))
                                 .frame(width: 24, height: 24)
                                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                             VStack(alignment: .leading, spacing: 2) {
@@ -2650,14 +2667,6 @@ struct AddFavoriteSheet: View {
         .frame(width: 340)
     }
 
-    private func icon(for home: CodexHome) -> String {
-        switch home.kind {
-        case .main: "house.fill"
-        case .clone: "square.on.square"
-        case .cleanRoom: "sparkles"
-        case .temporary: "timer"
-        }
-    }
 }
 
 struct DefaultLaunchCard: View {
@@ -2686,6 +2695,60 @@ struct DefaultLaunchCard: View {
 
     private var defaultHomeName: String {
         model.state.preferences.launchTemporaryByDefault ? "Temporary" : "Main"
+    }
+}
+
+struct LaunchModeStrip: View {
+    @EnvironmentObject var model: HomeportModel
+
+    private var binding: Binding<Bool> {
+        Binding(
+            get: { model.state.preferences.browserUseLocalTestingMode },
+            set: { model.setBrowserUseLocalTestingMode($0) }
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: model.state.preferences.browserUseLocalTestingMode ? "hammer.fill" : "shield")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(model.state.preferences.browserUseLocalTestingMode ? .orange : .secondary)
+                .frame(width: 20, height: 20)
+                .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 6))
+
+            Text("Launch mode:")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text(model.state.preferences.browserUseLocalTestingMode ? "Browser Dev" : "Normal")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(model.state.preferences.browserUseLocalTestingMode ? .orange : .primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Menu {
+                Picker("Launch Mode", selection: binding) {
+                    Text("Normal").tag(false)
+                    Text("Browser Dev").tag(true)
+                }
+            } label: {
+                Text("Change")
+                    .font(.caption.weight(.semibold))
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            model.state.preferences.browserUseLocalTestingMode ? Color.orange.opacity(0.10) : Color.secondary.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: 10)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(model.state.preferences.browserUseLocalTestingMode ? Color.orange.opacity(0.22) : Color.secondary.opacity(0.12))
+        )
     }
 }
 
@@ -3099,6 +3162,16 @@ struct SettingsTab: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
             }
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Browser local testing mode", isOn: Binding(
+                    get: { model.state.preferences.browserUseLocalTestingMode },
+                    set: { model.setBrowserUseLocalTestingMode($0) }
+                ))
+                Text("Launches Codex with BROWSER_USE_SECURITY_MODE=disabled-for-local-testing for local browser automation testing.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
             SectionLabel("Model Routing")
             ShimSetupCard()
             SectionLabel("Install")
@@ -3314,7 +3387,7 @@ struct FocusedHomeView: View {
                 editedName: $editedName,
                 moveFoldersOnRename: $moveFoldersOnRename,
                 authSummary: model.authSummary(for: home),
-                icon: icon(for: home),
+                icon: homeKindIcon(for: home),
                 launch: launch
             )
 
@@ -3351,15 +3424,6 @@ struct FocusedHomeView: View {
                 setPinned: setPinned,
                 delete: delete
             )
-        }
-    }
-
-    private func icon(for home: CodexHome) -> String {
-        switch home.kind {
-        case .main: "house.fill"
-        case .clone: "square.on.square"
-        case .cleanRoom: "sparkles"
-        case .temporary: "timer"
         }
     }
 }
@@ -3758,7 +3822,7 @@ struct HomeListRow: View {
             }
             Button(action: openDetail) {
                 HStack(spacing: 10) {
-                    Image(systemName: icon(for: home))
+                    Image(systemName: homeKindIcon(for: home))
                         .frame(width: 24, height: 24)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                     VStack(alignment: .leading, spacing: 2) {
@@ -3786,15 +3850,6 @@ struct HomeListRow: View {
         .padding(10)
         .background(.background, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
-    }
-
-    private func icon(for home: CodexHome) -> String {
-        switch home.kind {
-        case .main: "house.fill"
-        case .clone: "square.on.square"
-        case .cleanRoom: "sparkles"
-        case .temporary: "timer"
-        }
     }
 }
 
@@ -3904,16 +3959,28 @@ struct RecentLaunchRow: View {
                     .foregroundStyle(.red)
                     .frame(width: 20)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(instance.homeName) • \(targetLabel(instance.target))")
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                Text("\(relativeTime(instance.launchedAt)) • \(instance.workspacePath ?? "no workspace")")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            HStack(spacing: 10) {
+                Image(systemName: resolvedHome.map(homeKindIcon(for:)) ?? "clock.arrow.circlepath")
+                    .frame(width: 24, height: 24)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text("\(instance.homeName) • \(targetLabel(instance.target))")
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                        if let home = resolvedHome {
+                            HomeTags(home: home, compact: true)
+                            HomeAuthTag(home: home, compact: true)
+                        }
+                    }
+                    Text("\(relativeTime(instance.launchedAt)) • \(instance.workspacePath ?? "no workspace")")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer()
             if showsStatus {
                 Text("Open")
                     .font(.caption2.weight(.semibold))
@@ -3930,6 +3997,10 @@ struct RecentLaunchRow: View {
         .padding(10)
         .background(.background, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+    }
+
+    private var resolvedHome: CodexHome? {
+        model.state.homes.first { $0.id == instance.homeID }
     }
 }
 
@@ -4269,6 +4340,15 @@ private func kindLabel(for home: CodexHome) -> String {
     }
 }
 
+private func homeKindIcon(for home: CodexHome) -> String {
+    switch home.kind {
+    case .main: "house.fill"
+    case .clone: "square.on.square"
+    case .cleanRoom: "sparkles"
+    case .temporary: "timer"
+    }
+}
+
 private func targetLabel(_ target: LaunchTarget) -> String {
     target == .desktop ? "Desktop App" : "Terminal"
 }
@@ -4379,7 +4459,7 @@ struct HomeCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label(home.name, systemImage: icon(for: home))
+                Label(home.name, systemImage: homeKindIcon(for: home))
                     .font(.headline)
                 Spacer()
                 Button {
@@ -4467,15 +4547,6 @@ struct HomeCard: View {
         let refreshedHome = model.state.homes.first { $0.id == home.id } ?? home
         if trimmedPath != home.homePath {
             model.changeHomePath(refreshedHome, homePath: trimmedPath, moveExisting: moveHomePathOnSave)
-        }
-    }
-
-    private func icon(for home: CodexHome) -> String {
-        switch home.kind {
-        case .main: "house"
-        case .cleanRoom: "sparkle.magnifyingglass"
-        case .clone: "square.on.square"
-        case .temporary: "timer"
         }
     }
 }
