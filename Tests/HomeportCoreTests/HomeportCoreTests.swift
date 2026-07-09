@@ -17,6 +17,25 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertNil(suggestedHomeName(fromHomePath: "   "))
     }
 
+    func testBundledShimIsPreferredAndExplicitOverrideWins() throws {
+        let root = try makeTempRoot()
+        let bundled = root.appendingPathComponent("run-codex-shim")
+        let external = root.appendingPathComponent("codex-shim")
+        try "#!/bin/sh\nexit 0\n".write(to: bundled, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nexit 0\n".write(to: external, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bundled.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: external.path)
+
+        XCTAssertEqual(
+            resolveShimExecutablePath(overridePath: "", bundledPath: bundled.path, externalCandidates: [external.path]),
+            bundled.path
+        )
+        XCTAssertEqual(
+            resolveShimExecutablePath(overridePath: external.path, bundledPath: bundled.path, externalCandidates: []),
+            external.path
+        )
+    }
+
     func testConfigOnlyCloneCopiesExpectedFiles() throws {
         let root = try makeTempRoot()
         let source = root.appendingPathComponent("source")

@@ -22,7 +22,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "CodexMultihomeApp",
-            dependencies: ["HomeportCore"]
+            dependencies: ["HomeportCore"],
+            resources: [
+                .copy("Resources/codex-shim")
+            ]
         ),
         .testTarget(
             name: "HomeportCoreTests",

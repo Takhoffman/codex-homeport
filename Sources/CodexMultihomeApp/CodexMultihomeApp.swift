@@ -1076,18 +1076,35 @@ final class HomeportModel: ObservableObject {
 
     func defaultShimExecutablePath() -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = [
-            "\(home)/github.com/sybil-solutions/codex-shim/.venv/bin/codex-shim",
+        return resolveShimExecutablePath(
+            overridePath: "",
+            bundledPath: bundledShimExecutablePath(),
+            externalCandidates: [
             "\(home)/.local/bin/codex-shim",
             "/opt/homebrew/bin/codex-shim",
             "/usr/local/bin/codex-shim"
-        ]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? candidates[0]
+            ]
+        )
     }
 
     private func resolveShimExecutable(_ path: String) -> String {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? defaultShimExecutablePath() : expandUserPath(trimmed)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return resolveShimExecutablePath(
+            overridePath: path,
+            bundledPath: bundledShimExecutablePath(),
+            externalCandidates: [
+                "\(home)/.local/bin/codex-shim",
+                "/opt/homebrew/bin/codex-shim",
+                "/usr/local/bin/codex-shim"
+            ]
+        )
+    }
+
+    private func bundledShimExecutablePath() -> String? {
+        Bundle.module.resourceURL?
+            .appendingPathComponent("codex-shim", isDirectory: true)
+            .appendingPathComponent("run-codex-shim")
+            .path
     }
 
     private func modelSelector(for selector: String) -> String {
@@ -3121,7 +3138,7 @@ struct ShimSetupCard: View {
             )
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("codex-shim executable")
+                Text("Shim executable override")
                     .font(.caption.weight(.semibold))
                 TextField(model.defaultShimExecutablePath(), text: $executablePath)
                     .textFieldStyle(.roundedBorder)
@@ -3143,7 +3160,7 @@ struct ShimSetupCard: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
-                Text("Leave the executable blank to auto-detect.")
+                Text("Leave blank to use Multihome’s bundled shim. Set a path only to override it.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

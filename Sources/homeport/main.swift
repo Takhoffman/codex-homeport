@@ -411,6 +411,25 @@ func buildAppBundle(repo: URL, channel: HomeportChannel) throws -> URL {
     try FileManager.default.copyItem(at: builtApp, to: executable)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
+    let buildRoot = repo.appendingPathComponent(".build", isDirectory: true)
+    let builtResources = FileManager.default
+        .enumerator(at: buildRoot, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])?
+        .compactMap { $0 as? URL }
+        .first { url in
+            url.lastPathComponent.hasSuffix("_CodexMultihomeApp.bundle")
+                && url.path.contains("/release/")
+        }
+    guard let builtResources else {
+        throw HomeportError.commandFailed("Bundled shim resources were not produced by the Swift build.")
+    }
+    let installedResources = app
+        .appendingPathComponent("Contents/Resources", isDirectory: true)
+        .appendingPathComponent(builtResources.lastPathComponent, isDirectory: true)
+    if FileManager.default.fileExists(atPath: installedResources.path) {
+        try trash(installedResources)
+    }
+    try FileManager.default.copyItem(at: builtResources, to: installedResources)
+
     let plist = """
     <?xml version="1.0" encoding="UTF-8"?>
     <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
