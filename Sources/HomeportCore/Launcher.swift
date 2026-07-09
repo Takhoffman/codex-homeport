@@ -240,6 +240,60 @@ func applyBrowserUseLocalTestingMode(_ isEnabled: Bool, to environment: inout [S
     }
 }
 
+public func setBrowserUseLocalTestingModeInConfig(in homeURL: URL, isEnabled: Bool, fileManager: FileManager = .default) throws {
+    let configURL = homeURL.appendingPathComponent("config.toml")
+    let existing = fileManager.fileExists(atPath: configURL.path)
+        ? try String(contentsOf: configURL, encoding: .utf8)
+        : ""
+    let next = updateNodeReplEnv(
+        in: existing,
+        key: "BROWSER_USE_SECURITY_MODE",
+        value: isEnabled ? "disabled-for-local-testing" : nil
+    )
+    guard next != existing else { return }
+    try fileManager.createDirectory(at: homeURL, withIntermediateDirectories: true)
+    try next.write(to: configURL, atomically: true, encoding: .utf8)
+}
+
+func updateNodeReplEnv(in toml: String, key: String, value: String?) -> String {
+    var lines = toml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    let hadTrailingNewline = toml.hasSuffix("\n")
+    let tableHeader = "[mcp_servers.node_repl.env]"
+    let assignmentPrefix = "\(key) "
+    let assignment = value.map { "\(key) = \"\($0)\"" }
+
+    guard let tableIndex = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == tableHeader }) else {
+        guard let assignment else { return toml }
+        let block = toml.isEmpty || hadTrailingNewline
+            ? "\(tableHeader)\n\(assignment)\n"
+            : "\n\(tableHeader)\n\(assignment)\n"
+        return toml + block
+    }
+
+    let tableEnd = lines[(tableIndex + 1)...].firstIndex { line in
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasPrefix("[") && trimmed.hasSuffix("]")
+    } ?? lines.endIndex
+
+    if let keyIndex = lines[(tableIndex + 1)..<tableEnd].firstIndex(where: { line in
+        line.trimmingCharacters(in: .whitespaces).hasPrefix(assignmentPrefix)
+    }) {
+        if let assignment {
+            lines[keyIndex] = assignment
+        } else {
+            lines.remove(at: keyIndex)
+        }
+    } else if let assignment {
+        lines.insert(assignment, at: tableIndex + 1)
+    }
+
+    var result = lines.joined(separator: "\n")
+    if hadTrailingNewline || !result.isEmpty {
+        result += "\n"
+    }
+    return result
+}
+
 func shimBrowserCompatibleDesktopEnvironmentArguments(environment: [String: String]) -> [String] {
     let browserFeatureOverrides = #"{"browserPane":true,"inAppBrowserUse":true,"inAppBrowserUseAllowed":true,"multiBrowserTabs":true}"#
     var arguments = [

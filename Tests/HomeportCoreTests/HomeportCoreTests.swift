@@ -373,6 +373,49 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(environment["OTHER"], "1")
     }
 
+    func testBrowserUseLocalTestingModeUpdatesNodeReplConfig() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let config = home.appendingPathComponent("config.toml")
+        try """
+        model = "gpt-5"
+
+        [mcp_servers.node_repl.env]
+        NODE_REPL_NODE_PATH = "/Applications/Codex.app/Contents/Resources/cua_node/bin/node"
+        """.write(to: config, atomically: true, encoding: .utf8)
+
+        try setBrowserUseLocalTestingModeInConfig(in: home, isEnabled: true)
+        try setBrowserUseLocalTestingModeInConfig(in: home, isEnabled: true)
+
+        var text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertEqual(text.components(separatedBy: "BROWSER_USE_SECURITY_MODE").count, 2)
+        XCTAssertTrue(text.contains("[mcp_servers.node_repl.env]\nBROWSER_USE_SECURITY_MODE = \"disabled-for-local-testing\"\nNODE_REPL_NODE_PATH"))
+
+        try setBrowserUseLocalTestingModeInConfig(in: home, isEnabled: false)
+
+        text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertFalse(text.contains("BROWSER_USE_SECURITY_MODE"))
+        XCTAssertTrue(text.contains("NODE_REPL_NODE_PATH"))
+    }
+
+    func testBrowserUseLocalTestingModeCreatesNodeReplConfigTable() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex", isDirectory: true)
+
+        try setBrowserUseLocalTestingModeInConfig(in: home, isEnabled: true)
+
+        let text = try String(contentsOf: home.appendingPathComponent("config.toml"), encoding: .utf8)
+        XCTAssertEqual(
+            text,
+            """
+            [mcp_servers.node_repl.env]
+            BROWSER_USE_SECURITY_MODE = "disabled-for-local-testing"
+
+            """
+        )
+    }
+
     func testShimDesktopEnvironmentEnablesBrowserCompatibleDevLaunch() {
         let arguments = shimBrowserCompatibleDesktopEnvironmentArguments(environment: [
             "NO_PROXY": "localhost,127.0.0.1",

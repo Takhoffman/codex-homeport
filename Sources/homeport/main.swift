@@ -588,6 +588,7 @@ func configure(_ arguments: [String]) throws {
         var state = try service.loadState()
         state.preferences.browserUseLocalTestingMode = isEnabled
         try service.saveState(state)
+        try setBrowserUseLocalTestingModeInConfig(in: service.paths.mainCodexHome, isEnabled: isEnabled)
         print("Browser Use local testing mode: \(isEnabled)")
     }
 

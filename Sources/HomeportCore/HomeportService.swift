@@ -261,6 +261,10 @@ public final class HomeportService: @unchecked Sendable {
         } else {
             home = try resolveHome(selector: selector, in: state)
         }
+        try setBrowserUseLocalTestingModeInConfig(
+            in: URL(fileURLWithPath: home.homePath),
+            isEnabled: state.preferences.browserUseLocalTestingMode
+        )
         let selectedTerminal = terminal ?? state.preferredTerminal
         let pid = try launcher.launch(
             home: home,

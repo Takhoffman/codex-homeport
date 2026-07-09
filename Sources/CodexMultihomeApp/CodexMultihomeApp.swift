@@ -400,6 +400,7 @@ final class HomeportModel: ObservableObject {
             var next = try service.loadState()
             next.preferences.browserUseLocalTestingMode = value
             try service.saveState(next)
+            try setBrowserUseLocalTestingModeInConfig(in: service.paths.mainCodexHome, isEnabled: value)
             refresh()
         } catch {
             status = error.localizedDescription
