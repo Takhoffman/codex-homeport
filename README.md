@@ -193,6 +193,7 @@ homeport configure --clone-preset config-only
 homeport configure --clone-include config,skills,plugins
 homeport configure --clone-exclude auth,sessions
 homeport configure --temporary on
+homeport configure --allow-forbidden-computer-use-targets on
 homeport configure --update-checks on
 homeport configure --update-interval weekly
 homeport configure --auto-install-updates off
@@ -200,6 +201,11 @@ homeport configure --autostart on
 homeport configure --show
 homeport configure --reset
 ```
+
+Onboarding applies Apple's global Computer Use target default so desktop
+automation can reach apps that macOS otherwise marks as forbidden. Turn it off
+with `homeport configure --allow-forbidden-computer-use-targets off`, or use the
+Settings tab in the menu bar app.
 
 To uninstall the app and autostart entry while keeping Codex homes and Multihome state:
 

@@ -67,6 +67,7 @@ final class HomeportModel: ObservableObject {
     @Published var shimStatus = "Ready"
     @Published var shimProviderStatuses: [ShimLoginProvider: ShimProviderStatus] = [:]
     @Published var shimAppBundleStatus = ShimAppBundleStatus.checking
+    @Published var allowForbiddenComputerUseTargets: Bool?
 
     let service: HomeportService
     private var updateMonitorTask: Task<Void, Never>?
@@ -112,6 +113,7 @@ final class HomeportModel: ObservableObject {
             }
             state = loadedState
             report = service.report()
+            allowForbiddenComputerUseTargets = ComputerUseDefaults.readAllowForbiddenTargets()
             var nextAuthStatuses = Dictionary(uniqueKeysWithValues: state.homes.map { home in
                 (home.id, service.authStatus(for: home))
             })
@@ -375,6 +377,19 @@ final class HomeportModel: ObservableObject {
             next.preferences.launchTemporaryByDefault = value
             try service.saveState(next)
             refresh(statusMessage: "Saved default home")
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func setAllowForbiddenComputerUseTargets(_ value: Bool) {
+        do {
+            var next = try service.loadState()
+            next.preferences.allowForbiddenComputerUseTargetsByDefault = value
+            try service.saveState(next)
+            try ComputerUseDefaults.setAllowForbiddenTargets(value)
+            try ComputerUseDefaults.applyInstallSupport(in: service.paths.mainCodexHome, isEnabled: value)
+            refresh(statusMessage: value ? "Enabled Computer Use target access" : "Disabled Computer Use target access")
         } catch {
             status = error.localizedDescription
         }
@@ -3074,6 +3089,16 @@ struct SettingsTab: View {
             ))
             Toggle("Install app by default", isOn: .constant(model.state.preferences.installAppByDefault))
                 .disabled(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Allow full Computer Use targets", isOn: Binding(
+                    get: { model.allowForbiddenComputerUseTargets ?? model.state.preferences.allowForbiddenComputerUseTargetsByDefault },
+                    set: { model.setAllowForbiddenComputerUseTargets($0) }
+                ))
+                Text(computerUseTargetsDetail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
             SectionLabel("Model Routing")
             ShimSetupCard()
             SectionLabel("Install")
@@ -3089,6 +3114,17 @@ struct SettingsTab: View {
                 model.resetDefaults()
             }
             .buttonStyle(.bordered)
+        }
+    }
+
+    private var computerUseTargetsDetail: String {
+        switch model.allowForbiddenComputerUseTargets {
+        case .some(true):
+            return "macOS global default is enabled for Apple Computer Use target access."
+        case .some(false):
+            return "macOS global default is disabled. Some app-control targets may stay unavailable."
+        case .none:
+            return "macOS global default is unset. Onboarding enables it unless configured off."
         }
     }
 }

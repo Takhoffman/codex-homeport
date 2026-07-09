@@ -428,6 +428,62 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertTrue(text.contains("[plugins.\"computer-use@openai-bundled\"]\nenabled = true"))
     }
 
+    func testDefaultInstallEnablesBundledComputerUsePluginInMainConfig() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let config = home.appendingPathComponent("config.toml")
+        try "model = \"gpt-5\"\n".write(to: config, atomically: true, encoding: .utf8)
+
+        try ComputerUseDefaults.applyInstallSupport(in: home, isEnabled: true)
+        try ComputerUseDefaults.applyInstallSupport(in: home, isEnabled: true)
+
+        let text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertTrue(text.contains("model = \"gpt-5\""))
+        XCTAssertEqual(text.components(separatedBy: computerUseDefaultInstallBegin).count, 2)
+        XCTAssertTrue(text.contains("[plugins.\"computer-use@openai-bundled\"]\nenabled = true"))
+    }
+
+    func testDefaultInstallDoesNotDuplicateExistingComputerUsePluginTable() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let config = home.appendingPathComponent("config.toml")
+        try """
+        [plugins."computer-use@openai-bundled"]
+        enabled = true
+        """.write(to: config, atomically: true, encoding: .utf8)
+
+        try ComputerUseDefaults.applyInstallSupport(in: home, isEnabled: true)
+
+        let text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertEqual(text.components(separatedBy: "[plugins.\"computer-use@openai-bundled\"]").count, 2)
+        XCTAssertFalse(text.contains(computerUseDefaultInstallBegin))
+    }
+
+    func testCachedComputerUseSkillPatchAddsForbiddenTargetsInstructions() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex", isDirectory: true)
+        let skill = home
+            .appendingPathComponent("plugins/cache/openai-bundled/computer-use/1.0.857/skills/computer-use", isDirectory: true)
+            .appendingPathComponent("SKILL.md")
+        try FileManager.default.createDirectory(at: skill.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        # Computer Use
+
+        Use for desktop app control.
+        """.write(to: skill, atomically: true, encoding: .utf8)
+
+        try ComputerUseDefaults.applyInstallSupport(in: home, isEnabled: true)
+        try ComputerUseDefaults.applyInstallSupport(in: home, isEnabled: true)
+
+        let patched = try String(contentsOf: skill, encoding: .utf8)
+        XCTAssertEqual(patched.components(separatedBy: forbiddenComputerUseTargetsMarker).count, 2)
+        XCTAssertTrue(patched.contains("defaults read -g ComputerUseAllowForbiddenTargets"))
+        XCTAssertTrue(patched.contains("defaults write -g ComputerUseAllowForbiddenTargets -bool YES"))
+        XCTAssertTrue(patched.contains(forbiddenComputerUseTargetsEndMarker))
+    }
+
     func testDiagnosticsCountsSessions() throws {
         let root = try makeTempRoot()
         let home = root.appendingPathComponent(".codex")
@@ -812,6 +868,7 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(preferences.cloneMaterialization, .copy)
         XCTAssertEqual(preferences.cloneSourceSelector, "main")
         XCTAssertEqual(preferences.clonePolicies, ClonePolicies(options: preferences.cloneOptions, materialization: .copy))
+        XCTAssertTrue(preferences.allowForbiddenComputerUseTargetsByDefault)
         XCTAssertNil(preferences.lastClonePolicies)
     }
 

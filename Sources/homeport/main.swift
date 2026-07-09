@@ -566,6 +566,16 @@ func configure(_ arguments: [String]) throws {
         print("Install app by default: \(state.preferences.installAppByDefault)")
     }
 
+    if let allowComputerUseTargets = option(arguments, "--allow-forbidden-computer-use-targets") {
+        let isEnabled = try strictBoolValue(allowComputerUseTargets, optionName: "--allow-forbidden-computer-use-targets")
+        var state = try service.loadState()
+        state.preferences.allowForbiddenComputerUseTargetsByDefault = isEnabled
+        try service.saveState(state)
+        try ComputerUseDefaults.setAllowForbiddenTargets(isEnabled)
+        try ComputerUseDefaults.applyInstallSupport(in: service.paths.mainCodexHome, isEnabled: isEnabled)
+        print("Allow forbidden Computer Use targets: \(isEnabled)")
+    }
+
     if let updateChecks = option(arguments, "--update-checks") {
         var state = try service.loadState()
         state.preferences.autoUpdateChecksEnabled = try strictBoolValue(updateChecks, optionName: "--update-checks")
@@ -618,6 +628,9 @@ func configure(_ arguments: [String]) throws {
         print("Clone includes: \(cloneOptionSummary(state.preferences.cloneOptions))")
         print("Launch temporary by default: \(state.preferences.launchTemporaryByDefault)")
         print("Install app by default: \(state.preferences.installAppByDefault)")
+        print("Allow forbidden Computer Use targets by default: \(state.preferences.allowForbiddenComputerUseTargetsByDefault)")
+        let computerUseDefault = ComputerUseDefaults.readAllowForbiddenTargets().map(String.init(describing:)) ?? "unset"
+        print("Current macOS Computer Use target default: \(computerUseDefault)")
         print("Update checks enabled: \(state.preferences.autoUpdateChecksEnabled)")
         print("Update interval: \(state.preferences.updateCheckInterval.rawValue)")
         print("Auto-install updates: \(state.preferences.autoInstallUpdates)")
@@ -632,10 +645,19 @@ func onboard(_ arguments: [String]) throws {
     let terminal = option(arguments, "--terminal") ?? "terminal"
     let workspace = option(arguments, "--workspace") ?? FileManager.default.currentDirectoryPath
     let channel = try channel(from: arguments)
+    let allowComputerUseTargets = try option(arguments, "--allow-forbidden-computer-use-targets")
+        .map { try strictBoolValue($0, optionName: "--allow-forbidden-computer-use-targets") }
+        ?? true
 
     let channelArguments = ["--channel", channel.rawValue]
     try install(["--repo", repo.path, "--prefix", prefix, "--with-app", "--app-dir", appDir] + channelArguments)
-    try configure(["--terminal", terminal, "--workspace", workspace, "--autostart", "on", "--app-dir", appDir] + channelArguments)
+    try configure([
+        "--terminal", terminal,
+        "--workspace", workspace,
+        "--autostart", "on",
+        "--app-dir", appDir,
+        "--allow-forbidden-computer-use-targets", allowComputerUseTargets ? "on" : "off"
+    ] + channelArguments)
     try start(["--app-dir", appDir] + channelArguments)
     print("Onboarding complete.")
 }
@@ -1463,6 +1485,8 @@ Options:
   --clone-exclude LIST                  Remember clone categories to exclude.
   --temporary on|off                    Prefer temporary launch mode in UI.
   --install-app on|off                  Default whether onboarding installs app.
+  --allow-forbidden-computer-use-targets on|off
+                                        Set Apple's global Computer Use target default.
   --update-checks on|off                Enable proactive npm update checks.
   --update-interval daily|weekly        How often the app checks for updates.
   --auto-install-updates on|off         Install available updates without prompting.
@@ -1481,6 +1505,7 @@ Examples:
   homeport configure --clone-exclude auth,sessions
   homeport configure --update-checks on --update-interval weekly
   homeport configure --auto-install-updates off
+  homeport configure --allow-forbidden-computer-use-targets on
   homeport configure --reset
   homeport configure --autostart on
 """ }
@@ -1492,7 +1517,7 @@ Friendly first-run setup: install CLI, install app, save preferences, enable
 autostart, and start the menu bar app.
 
 Usage:
-  homeport onboard [--prefix PATH] [--app-dir PATH] [--terminal terminal|iTerm] [--workspace PATH] [--repo PATH]
+  homeport onboard [--prefix PATH] [--app-dir PATH] [--terminal terminal|iTerm] [--workspace PATH] [--repo PATH] [--allow-forbidden-computer-use-targets on|off]
 
 Defaults:
   --prefix ~/bin

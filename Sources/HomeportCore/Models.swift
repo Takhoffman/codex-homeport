@@ -532,6 +532,7 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
     public var launchTemporaryByDefault: Bool
     public var onboardEnablesAutostart: Bool
     public var installAppByDefault: Bool
+    public var allowForbiddenComputerUseTargetsByDefault: Bool
     public var autoUpdateChecksEnabled: Bool
     public var autoInstallUpdates: Bool
     public var updateCheckInterval: UpdateCheckInterval
@@ -549,6 +550,7 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         launchTemporaryByDefault: Bool = false,
         onboardEnablesAutostart: Bool = true,
         installAppByDefault: Bool = true,
+        allowForbiddenComputerUseTargetsByDefault: Bool = true,
         autoUpdateChecksEnabled: Bool = true,
         autoInstallUpdates: Bool = false,
         updateCheckInterval: UpdateCheckInterval = .daily,
@@ -565,6 +567,7 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         self.launchTemporaryByDefault = launchTemporaryByDefault
         self.onboardEnablesAutostart = onboardEnablesAutostart
         self.installAppByDefault = installAppByDefault
+        self.allowForbiddenComputerUseTargetsByDefault = allowForbiddenComputerUseTargetsByDefault
         self.autoUpdateChecksEnabled = autoUpdateChecksEnabled
         self.autoInstallUpdates = autoInstallUpdates
         self.updateCheckInterval = updateCheckInterval
@@ -583,6 +586,7 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         case launchTemporaryByDefault
         case onboardEnablesAutostart
         case installAppByDefault
+        case allowForbiddenComputerUseTargetsByDefault
         case autoUpdateChecksEnabled
         case autoInstallUpdates
         case updateCheckInterval
@@ -603,6 +607,7 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         self.launchTemporaryByDefault = try container.decodeIfPresent(Bool.self, forKey: .launchTemporaryByDefault) ?? false
         self.onboardEnablesAutostart = try container.decodeIfPresent(Bool.self, forKey: .onboardEnablesAutostart) ?? true
         self.installAppByDefault = try container.decodeIfPresent(Bool.self, forKey: .installAppByDefault) ?? true
+        self.allowForbiddenComputerUseTargetsByDefault = try container.decodeIfPresent(Bool.self, forKey: .allowForbiddenComputerUseTargetsByDefault) ?? true
         self.autoUpdateChecksEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoUpdateChecksEnabled) ?? true
         self.autoInstallUpdates = try container.decodeIfPresent(Bool.self, forKey: .autoInstallUpdates) ?? false
         self.updateCheckInterval = try container.decodeIfPresent(UpdateCheckInterval.self, forKey: .updateCheckInterval) ?? .daily
