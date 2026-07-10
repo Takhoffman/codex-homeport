@@ -178,7 +178,40 @@ public struct FileCopier {
         if fileManager.fileExists(atPath: destination.path) {
             try trash(destination)
         }
-        try fileManager.copyItem(at: source, to: destination)
+        try copyRecursively(from: source, to: destination)
+    }
+
+    /// Copies directories without carrying over live filesystem objects such as
+    /// Git's fsmonitor socket. Those objects are process-specific and cannot be
+    /// materialized into another CODEX_HOME; regular files, directories, and
+    /// symbolic links are retained.
+    private func copyRecursively(from source: URL, to destination: URL) throws {
+        let attributes = try fileManager.attributesOfItem(atPath: source.path)
+        guard let type = attributes[.type] as? FileAttributeType else {
+            return
+        }
+
+        switch type {
+        case .typeDirectory:
+            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+            let children = try fileManager.contentsOfDirectory(
+                at: source,
+                includingPropertiesForKeys: nil,
+                options: [.skipsSubdirectoryDescendants]
+            )
+            for child in children {
+                try copyRecursively(from: child, to: destination.appendingPathComponent(child.lastPathComponent))
+            }
+        case .typeSymbolicLink:
+            let target = try fileManager.destinationOfSymbolicLink(atPath: source.path)
+            try fileManager.createSymbolicLink(atPath: destination.path, withDestinationPath: target)
+        case .typeRegular:
+            try fileManager.copyItem(at: source, to: destination)
+        default:
+            // Sockets, FIFOs, device files, and other process-local objects are
+            // deliberately omitted from cloned homes.
+            return
+        }
     }
 
     private func resolvedOneHopSymlink(_ url: URL) throws -> URL {

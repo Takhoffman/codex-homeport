@@ -37,6 +37,42 @@ public final class HomeportService: @unchecked Sendable {
         try store.save(state)
     }
 
+    public func setBrowserUseLocalTestingMode(_ isEnabled: Bool) throws {
+        var state = try store.load()
+        state.preferences.browserUseLocalTestingMode = isEnabled
+        for home in state.homes {
+            try setBrowserUseLocalTestingModeInConfig(
+                in: URL(fileURLWithPath: home.homePath),
+                isEnabled: isEnabled,
+                fileManager: fileManager
+            )
+        }
+        try store.save(state)
+    }
+
+    public func setDesktopAppDevFlavor(_ isEnabled: Bool) throws {
+        var state = try store.load()
+        state.preferences.desktopAppDevFlavor = isEnabled
+        try store.save(state)
+    }
+
+    public func setDevelopmentLaunchPreferences(
+        browserUseLocalTestingMode: Bool,
+        desktopAppDevFlavor: Bool
+    ) throws {
+        var state = try store.load()
+        state.preferences.browserUseLocalTestingMode = browserUseLocalTestingMode
+        state.preferences.desktopAppDevFlavor = desktopAppDevFlavor
+        for home in state.homes {
+            try setBrowserUseLocalTestingModeInConfig(
+                in: URL(fileURLWithPath: home.homePath),
+                isEnabled: browserUseLocalTestingMode,
+                fileManager: fileManager
+            )
+        }
+        try store.save(state)
+    }
+
     public func createCleanRoom(name: String? = nil, homePath: String? = nil) throws -> CodexHome {
         let resolvedName = name ?? homePath.flatMap(suggestedHomeName(fromHomePath:)) ?? "Clean Room"
         let slugBase = name == nil && homePath == nil ? timestampSlug(prefix: "clean-room") : slugify(resolvedName)
@@ -51,15 +87,24 @@ public final class HomeportService: @unchecked Sendable {
         )
     }
 
-    public func createTemporary(name: String? = nil, homePath: String? = nil) throws -> CodexHome {
+    public func createTemporary(
+        name: String? = nil,
+        homePath: String? = nil,
+        policies: ClonePolicies? = nil,
+        sourceSelector: String = "main",
+        preset: ClonePreset = .workingSetup
+    ) throws -> CodexHome {
         let resolvedName = name ?? homePath.flatMap(suggestedHomeName(fromHomePath:)) ?? "Temporary"
         let slugBase = name == nil && homePath == nil ? timestampSlug(prefix: "temp") : slugify(resolvedName)
         let slug = uniqueSlug(base: slugBase)
+        let sourceURL = try policies.map { _ in try cloneSourceURL(selector: sourceSelector) }
         return try createManagedHome(
             name: resolvedName,
             slug: slug,
             kind: .temporary,
-            preset: .empty,
+            preset: policies == nil ? .empty : preset,
+            policies: policies,
+            sourceURL: sourceURL,
             destinationHomeURL: try homePath.map(normalizedHomeURL),
             temporary: true
         )
@@ -272,7 +317,8 @@ public final class HomeportService: @unchecked Sendable {
             workspace: workspace,
             terminal: selectedTerminal,
             appBundle: appBundle,
-            browserUseLocalTestingMode: state.preferences.browserUseLocalTestingMode
+            browserUseLocalTestingMode: state.preferences.browserUseLocalTestingMode,
+            desktopAppDevFlavor: state.preferences.desktopAppDevFlavor
         )
         let launchedProfilePath = target == .desktop && appBundle != nil
             ? home.profilePath.map { "\($0)-shim" }

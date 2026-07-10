@@ -40,6 +40,7 @@ swift run homeport create --kind clean-room --name "Blank Slate"
 swift run homeport rename blank-slate --name "Scratch Lab"
 swift run homeport delete scratch-lab
 swift run homeport clone --preset working-setup --name "Test Home"
+swift run homeport clone --preset working-setup --name "Disposable Test Home" --temporary
 swift run homeport clone --name "Shared Skills" --source main --link-safe --include skills,plugins
 swift run homeport clone --name "Shared Auth" --source main --link-auth --include config,auth
 swift run homeport clone --name "Linked Config" --source main --include config,auth --link config
@@ -67,6 +68,9 @@ swift run CodexMultihomeApp
 ```
 
 The menu bar app provides quick launch buttons, diagnostics, clone creation, clean-room creation, and cleanup review.
+The New Home screen and CLI share the same lifecycle model: add `--temporary`
+to a CLI clone, or enable **Temporary home** in the app, to keep the selected
+copy/link policies while marking the home for cleanup review.
 
 To run a dev menu bar app beside the live app:
 
@@ -205,6 +209,8 @@ homeport configure --clone-include config,skills,plugins
 homeport configure --clone-exclude auth,sessions
 homeport configure --temporary on
 homeport configure --allow-forbidden-computer-use-targets on
+homeport configure --browser-use-local-testing on
+homeport configure --desktop-app-dev-flavor on
 homeport configure --browser-use-local-testing on
 homeport configure --update-checks on
 homeport configure --update-interval weekly

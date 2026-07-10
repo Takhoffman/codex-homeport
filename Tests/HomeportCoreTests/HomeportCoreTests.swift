@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import HomeportCore
 
 final class HomeportCoreTests: XCTestCase {
@@ -99,6 +100,26 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("plugins").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("auth.json").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("session_index.jsonl").path))
+    }
+
+    func testCopySkipsTransientFilesystemObjectsInsideGitMetadata() throws {
+        let root = try makeTempRoot()
+        let source = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        let gitDirectory = source.appendingPathComponent("skills/example/.git", isDirectory: true)
+        try FileManager.default.createDirectory(at: gitDirectory, withIntermediateDirectories: true)
+        try "skill".write(to: source.appendingPathComponent("skills/example/SKILL.md"), atomically: true, encoding: .utf8)
+        try "ref: refs/heads/main".write(to: gitDirectory.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+        let fifo = gitDirectory.appendingPathComponent("fsmonitor--daemon.ipc")
+        XCTAssertEqual(mkfifo(fifo.path, 0o600), 0)
+
+        var policies = ClonePolicies.empty
+        policies.skills = .copy
+        try FileCopier().createHome(destination: destination, source: source, policies: policies)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("skills/example/SKILL.md").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("skills/example/.git/HEAD").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("skills/example/.git/fsmonitor--daemon.ipc").path))
     }
 
     func testLinkSafeCloneSymlinksSafeCategoriesOnly() throws {
@@ -336,6 +357,26 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(saved.clonePolicies?.summary, "Link auth • Copy skills")
     }
 
+    func testTemporaryHomeCanCopySelectedPolicies() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let mainHome = root.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: mainHome, withIntermediateDirectories: true)
+        try "secret".write(to: mainHome.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+
+        let policies = ClonePolicies.empty
+        var authOnlyPolicies = policies
+        authOnlyPolicies.auth = .copy
+        let home = try service.createTemporary(name: "Authenticated Temp", policies: authOnlyPolicies)
+        let saved = try XCTUnwrap(try service.loadState().homes.first { $0.id == home.id })
+
+        XCTAssertEqual(saved.kind, .temporary)
+        XCTAssertTrue(saved.isTemporary)
+        XCTAssertEqual(saved.sourceHomePath, mainHome.path)
+        XCTAssertEqual(saved.clonePolicies, authOnlyPolicies)
+        XCTAssertEqual(try String(contentsOf: URL(fileURLWithPath: home.homePath).appendingPathComponent("auth.json")), "secret")
+    }
+
     func testInvalidCloneSourceThrows() throws {
         let root = try makeTempRoot()
         let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
@@ -392,6 +433,18 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(environment["OTHER"], "1")
     }
 
+    func testDesktopAppDevFlavorEnvironmentHelper() {
+        var environment = ["BUILD_FLAVOR": "existing", "OTHER": "1"]
+
+        applyDesktopAppDevFlavor(true, to: &environment)
+        XCTAssertEqual(environment["BUILD_FLAVOR"], "dev")
+        XCTAssertEqual(environment["OTHER"], "1")
+
+        applyDesktopAppDevFlavor(false, to: &environment)
+        XCTAssertNil(environment["BUILD_FLAVOR"])
+        XCTAssertEqual(environment["OTHER"], "1")
+    }
+
     func testBrowserUseLocalTestingModeUpdatesNodeReplConfig() throws {
         let root = try makeTempRoot()
         let home = root.appendingPathComponent(".codex", isDirectory: true)
@@ -433,6 +486,32 @@ final class HomeportCoreTests: XCTestCase {
 
             """
         )
+    }
+
+    func testServiceLaunchPreferencesStayInSyncAcrossDesktopAndCLICallers() throws {
+        let root = try makeTempRoot()
+        let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
+        let managedHome = try service.createCleanRoom(name: "Browser Lab")
+
+        try service.setBrowserUseLocalTestingMode(true)
+        try service.setDesktopAppDevFlavor(true)
+
+        let state = try service.loadState()
+        XCTAssertTrue(state.preferences.browserUseLocalTestingMode)
+        XCTAssertTrue(state.preferences.desktopAppDevFlavor)
+        for path in [root.appendingPathComponent(".codex").path, managedHome.homePath] {
+            let config = try String(
+                contentsOf: URL(fileURLWithPath: path).appendingPathComponent("config.toml"),
+                encoding: .utf8
+            )
+            XCTAssertTrue(config.contains("BROWSER_USE_SECURITY_MODE = \"disabled-for-local-testing\""))
+        }
+
+        try service.setBrowserUseLocalTestingMode(false)
+        try service.setDesktopAppDevFlavor(false)
+        let disabledState = try service.loadState()
+        XCTAssertFalse(disabledState.preferences.browserUseLocalTestingMode)
+        XCTAssertFalse(disabledState.preferences.desktopAppDevFlavor)
     }
 
     func testShimDesktopEnvironmentEnablesBrowserCompatibleDevLaunch() {
@@ -962,7 +1041,8 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(preferences.cloneSourceSelector, "main")
         XCTAssertEqual(preferences.clonePolicies, ClonePolicies(options: preferences.cloneOptions, materialization: .copy))
         XCTAssertTrue(preferences.allowForbiddenComputerUseTargetsByDefault)
-        XCTAssertFalse(preferences.browserUseLocalTestingMode)
+        XCTAssertTrue(preferences.browserUseLocalTestingMode)
+        XCTAssertTrue(preferences.desktopAppDevFlavor)
         XCTAssertNil(preferences.lastClonePolicies)
     }
 

@@ -21,6 +21,15 @@ struct CodexMultihomeApp: App {
                 .environmentObject(model)
                 .frame(minWidth: 820, minHeight: 560)
         }
+
+        .commands {
+            CommandGroup(replacing: .appTermination) {
+                Button("Quit Multihome") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .keyboardShortcut("q")
+            }
+        }
     }
 }
 
@@ -58,6 +67,7 @@ final class HomeportModel: ObservableObject {
     @Published var state = HomeportState()
     @Published var report = DiagnosticReport(globalCodexHome: nil, mainSessionCount: 0, suspiciousLaunchers: [], codexBinaryPath: nil, codexAppExists: false, authStatus: CodexAuthStatus(), notes: [])
     @Published var authStatuses: [UUID: CodexAuthStatus] = [:]
+    @Published var brokenLinkedTargets: [UUID: [String]] = [:]
     @Published var status = "Ready"
     @Published var workspacePath = FileManager.default.currentDirectoryPath
     @Published var isCheckingForUpdates = false
@@ -71,6 +81,9 @@ final class HomeportModel: ObservableObject {
 
     let service: HomeportService
     private var updateMonitorTask: Task<Void, Never>?
+    private var developmentLaunchSaveTask: Task<Void, Never>?
+    private var healthRefreshTask: Task<Void, Never>?
+    private var healthRefreshGeneration = 0
 
     var channel: HomeportChannel {
         service.paths.channel
@@ -112,19 +125,38 @@ final class HomeportModel: ObservableObject {
                 try service.saveState(loadedState)
             }
             state = loadedState
-            report = service.report()
             allowForbiddenComputerUseTargets = ComputerUseDefaults.readAllowForbiddenTargets()
-            var nextAuthStatuses = Dictionary(uniqueKeysWithValues: state.homes.map { home in
-                (home.id, service.authStatus(for: home))
-            })
-            if let mainHome = state.homes.first(where: { $0.kind == .main }) {
-                nextAuthStatuses[mainHome.id] = report.authStatus
-            }
-            authStatuses = nextAuthStatuses
             workspacePath = state.lastWorkspacePath ?? workspacePath
             status = statusMessage ?? "Ready"
+            scheduleHealthRefresh(for: loadedState.homes)
         } catch {
             status = error.localizedDescription
+        }
+    }
+
+    private func scheduleHealthRefresh(for homes: [CodexHome]) {
+        healthRefreshGeneration += 1
+        let generation = healthRefreshGeneration
+        healthRefreshTask?.cancel()
+        let service = service
+        healthRefreshTask = Task { [weak self] in
+            let result = await Task.detached {
+                let report = service.report()
+                var statuses = Dictionary(uniqueKeysWithValues: homes.map { home in
+                    (home.id, service.authStatus(for: home))
+                })
+                let brokenLinks = Dictionary(uniqueKeysWithValues: homes.map { home in
+                    (home.id, service.brokenLinkedTargets(for: home))
+                })
+                if let mainHome = homes.first(where: { $0.kind == .main }) {
+                    statuses[mainHome.id] = report.authStatus
+                }
+                return (report, statuses, brokenLinks)
+            }.value
+            guard !Task.isCancelled, let self, generation == self.healthRefreshGeneration else { return }
+            self.report = result.0
+            self.authStatuses = result.1
+            self.brokenLinkedTargets = result.2
         }
     }
 
@@ -257,9 +289,21 @@ final class HomeportModel: ObservableObject {
     }
 
     @discardableResult
-    func createTemporaryHome(name: String? = nil, homePath: String? = nil) -> CodexHome? {
+    func createTemporaryHome(
+        name: String? = nil,
+        homePath: String? = nil,
+        policies: ClonePolicies? = nil,
+        sourceSelector: String = "main",
+        preset: ClonePreset = .workingSetup
+    ) -> CodexHome? {
         do {
-            let home = try service.createTemporary(name: name, homePath: normalizedOptionalPath(homePath))
+            let home = try service.createTemporary(
+                name: name,
+                homePath: normalizedOptionalPath(homePath),
+                policies: policies,
+                sourceSelector: sourceSelector,
+                preset: preset
+            )
             refresh(statusMessage: "Created \(home.name)")
             return home
         } catch {
@@ -396,14 +440,42 @@ final class HomeportModel: ObservableObject {
     }
 
     func setBrowserUseLocalTestingMode(_ value: Bool) {
-        do {
-            var next = try service.loadState()
-            next.preferences.browserUseLocalTestingMode = value
-            try service.saveState(next)
-            try setBrowserUseLocalTestingModeInConfig(in: service.paths.mainCodexHome, isEnabled: value)
-            refresh()
-        } catch {
-            status = error.localizedDescription
+        var next = state
+        next.preferences.browserUseLocalTestingMode = value
+        state = next
+        scheduleDevelopmentLaunchSave()
+    }
+
+    func setDesktopAppDevFlavor(_ value: Bool) {
+        var next = state
+        next.preferences.desktopAppDevFlavor = value
+        state = next
+        scheduleDevelopmentLaunchSave()
+    }
+
+    private func scheduleDevelopmentLaunchSave() {
+        developmentLaunchSaveTask?.cancel()
+        let browserMode = state.preferences.browserUseLocalTestingMode
+        let appDevFlavor = state.preferences.desktopAppDevFlavor
+        let service = service
+        developmentLaunchSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+            let errorMessage = await Task.detached {
+                do {
+                    try service.setDevelopmentLaunchPreferences(
+                        browserUseLocalTestingMode: browserMode,
+                        desktopAppDevFlavor: appDevFlavor
+                    )
+                    return nil as String?
+                } catch {
+                    return error.localizedDescription
+                }
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            if let errorMessage {
+                self.status = errorMessage
+            }
         }
     }
 
@@ -961,14 +1033,20 @@ final class HomeportModel: ObservableObject {
     func loginWithProviderCLI(_ provider: ShimLoginProvider, home: CodexHome? = nil) {
         let command = provider.shellCommand(home: home)
         let script = Launcher().terminalAppleScript(command: command, terminal: state.preferredTerminal)
-        let result = runCommand(executable: "/usr/bin/osascript", arguments: ["-e", script], environment: ProcessInfo.processInfo.environment)
-        if result.succeeded {
-            shimStatus = "Opened \(provider.title) login"
-            status = "Opened \(provider.title) login"
-            refreshShimProviderStatuses(home: home)
-        } else {
-            shimStatus = result.summary(successMessage: "")
-            status = shimStatus
+        let environment = ProcessInfo.processInfo.environment
+        shimStatus = "Opening \(provider.title) login"
+        Task {
+            let result = await Task.detached {
+                runCommand(executable: "/usr/bin/osascript", arguments: ["-e", script], environment: environment)
+            }.value
+            if result.succeeded {
+                shimStatus = "Opened \(provider.title) login"
+                status = "Opened \(provider.title) login"
+                refreshShimProviderStatuses(home: home)
+            } else {
+                shimStatus = result.summary(successMessage: "")
+                status = shimStatus
+            }
         }
     }
 
@@ -1808,10 +1886,9 @@ enum MenuTab: String, CaseIterable, Identifiable {
     }
 }
 
-enum NewHomeMode: String, CaseIterable, Identifiable {
+enum NewHomeMode: String, CaseIterable, Identifiable, Sendable {
     case clone
     case cleanRoom
-    case temporary
     case configOnly
 
     var id: String { rawValue }
@@ -1820,7 +1897,6 @@ enum NewHomeMode: String, CaseIterable, Identifiable {
         switch self {
         case .clone: "Clone My Setup"
         case .cleanRoom: "Clean Room"
-        case .temporary: "Temporary Home"
         case .configOnly: "Config Only"
         }
     }
@@ -1829,7 +1905,6 @@ enum NewHomeMode: String, CaseIterable, Identifiable {
         switch self {
         case .clone: "Start from selected parts of your main Codex home"
         case .cleanRoom: "Fresh saved home with no inherited files"
-        case .temporary: "Disposable test home with cleanup review"
         case .configOnly: "Settings, skills, and prompts only"
         }
     }
@@ -1838,7 +1913,6 @@ enum NewHomeMode: String, CaseIterable, Identifiable {
         switch self {
         case .clone: "square.on.square"
         case .cleanRoom: "sparkles"
-        case .temporary: "timer"
         case .configOnly: "slider.horizontal.3"
         }
     }
@@ -1866,6 +1940,8 @@ struct HomeportMenuView: View {
     @State private var newHomeNameEdited = false
     @State private var newHomePath = ""
     @State private var newHomePathEdited = false
+    @State private var createsTemporaryHome = false
+    @State private var isCreatingHome = false
     @State private var showsAddFavoriteSheet = false
     @State private var pendingDeleteHome: CodexHome?
 
@@ -1951,6 +2027,19 @@ struct HomeportMenuView: View {
                         isEditingList = false
                     }
                 }
+
+                Divider()
+
+                Button {
+                    NSApplication.shared.terminate(nil)
+                } label: {
+                    Label("Quit Multihome", systemImage: "power")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
             }
             .frame(width: 390)
             .blur(radius: pendingDeleteHome == nil ? 0 : 1.5)
@@ -2011,6 +2100,8 @@ struct HomeportMenuView: View {
                 customNameEdited: $newHomeNameEdited,
                 customPath: $newHomePath,
                 customPathEdited: $newHomePathEdited,
+                createsTemporaryHome: $createsTemporaryHome,
+                isCreating: isCreatingHome,
                 suggestedName: suggestedNewHomeName(for: newHomeMode),
                 suggestedPath: suggestedNewHomePath(for: newHomeMode),
                 create: createNewHome
@@ -2131,25 +2222,55 @@ struct HomeportMenuView: View {
     }
 
     private func createNewHome() {
+        guard !isCreatingHome else { return }
         let suggestedName = suggestedNewHomeName(for: newHomeMode)
         let pathBackedName = suggestedHomeName(fromHomePath: newHomePath)
         let name = newHomeName.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedName = name.isEmpty ? (pathBackedName ?? suggestedName) : name
-        let createdHome: CodexHome?
-        switch newHomeMode {
-        case .clone:
-            createdHome = model.cloneWorkingSetup(name: resolvedName, homePath: newHomePath)
-        case .cleanRoom:
-            createdHome = model.cleanRoom(name: resolvedName, homePath: newHomePath)
-        case .temporary:
-            createdHome = model.createTemporaryHome(name: resolvedName, homePath: newHomePath)
-        case .configOnly:
-            createdHome = model.cloneConfigOnly(name: resolvedName, homePath: newHomePath)
+        let mode = newHomeMode
+        let temporary = createsTemporaryHome
+        let target = newHomeLaunchTarget
+        let preferences = model.state.preferences
+        let service = model.service
+        let trimmedPath = newHomePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let homePath = trimmedPath.isEmpty ? nil : trimmedPath
+        isCreatingHome = true
+        model.status = "Creating \(resolvedName)…"
+        Task {
+            let result: Result<CodexHome, Error> = await Task.detached {
+                do {
+                    let home: CodexHome
+                    switch mode {
+                    case .clone:
+                        home = temporary
+                            ? try service.createTemporary(name: resolvedName, homePath: homePath, policies: preferences.clonePolicies, sourceSelector: preferences.cloneSourceSelector, preset: preferences.defaultClonePreset)
+                            : try service.clone(name: resolvedName, preset: preferences.defaultClonePreset, policies: preferences.clonePolicies, sourceSelector: preferences.cloneSourceSelector, homePath: homePath)
+                    case .cleanRoom:
+                        home = temporary
+                            ? try service.createTemporary(name: resolvedName, homePath: homePath)
+                            : try service.createCleanRoom(name: resolvedName, homePath: homePath)
+                    case .configOnly:
+                        home = temporary
+                            ? try service.createTemporary(name: resolvedName, homePath: homePath, policies: .configOnly, sourceSelector: preferences.cloneSourceSelector, preset: .configOnly)
+                            : try service.clone(name: resolvedName, preset: .configOnly, policies: .configOnly, sourceSelector: preferences.cloneSourceSelector, homePath: homePath)
+                    }
+                    return .success(home)
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+            isCreatingHome = false
+            guard case let .success(createdHome) = result else {
+                if case let .failure(error) = result { model.status = error.localizedDescription }
+                return
+            }
+            model.refresh(statusMessage: "Created \(createdHome.name)")
+            finishCreatingHome(createdHome, launchTarget: target)
         }
-        guard let createdHome else {
-            return
-        }
-        let didLaunch = model.launch(createdHome.slug, target: newHomeLaunchTarget)
+    }
+
+    private func finishCreatingHome(_ createdHome: CodexHome, launchTarget: LaunchTarget) {
+        let didLaunch = model.launch(createdHome.slug, target: launchTarget)
         let launchFailure = model.status
         let refreshedHome = model.state.homes.first { $0.id == createdHome.id } ?? createdHome
         detailReturnTab = .homes
@@ -2163,6 +2284,7 @@ struct HomeportMenuView: View {
         newHomeNameEdited = false
         newHomePath = ""
         newHomePathEdited = false
+        createsTemporaryHome = false
         isEditingList = false
         isEditingDetail = false
         model.status = didLaunch
@@ -2178,8 +2300,6 @@ struct HomeportMenuView: View {
             return "Working Setup \(formatter.string(from: Date()))"
         case .cleanRoom:
             return "Clean Room"
-        case .temporary:
-            return "Temporary"
         case .configOnly:
             return "Config Copy \(formatter.string(from: Date()))"
         }
@@ -2214,11 +2334,23 @@ struct HomeportMenuView: View {
 
     private func confirmDeleteHome(_ home: CodexHome) {
         pendingDeleteHome = nil
-        let didDelete = model.deleteHome(home)
-        if didDelete && focusedHome?.id == home.id {
-            focusedHome = nil
-            isEditingDetail = false
-            selectedTab = detailReturnTab
+        model.status = "Deleting \(home.name)…"
+        let service = model.service
+        Task {
+            let result: Result<Void, Error> = await Task.detached {
+                Result { _ = try service.deleteHome(id: home.id) }
+            }.value
+            switch result {
+            case .success:
+                model.refresh(statusMessage: "Deleted \(home.name)")
+                if focusedHome?.id == home.id {
+                    focusedHome = nil
+                    isEditingDetail = false
+                    selectedTab = detailReturnTab
+                }
+            case let .failure(error):
+                model.status = error.localizedDescription
+            }
         }
     }
 }
@@ -2613,53 +2745,59 @@ struct DefaultLaunchCard: View {
 struct LaunchModeStrip: View {
     @EnvironmentObject var model: HomeportModel
 
-    private var binding: Binding<Bool> {
+    private var browserDevBinding: Binding<Bool> {
         Binding(
             get: { model.state.preferences.browserUseLocalTestingMode },
             set: { model.setBrowserUseLocalTestingMode($0) }
         )
     }
 
+    private var appDevBinding: Binding<Bool> {
+        Binding(
+            get: { model.state.preferences.desktopAppDevFlavor },
+            set: { model.setDesktopAppDevFlavor($0) }
+        )
+    }
+
+    private var isUsingDevMode: Bool {
+        model.state.preferences.browserUseLocalTestingMode || model.state.preferences.desktopAppDevFlavor
+    }
+
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: model.state.preferences.browserUseLocalTestingMode ? "hammer.fill" : "shield")
+            Image(systemName: isUsingDevMode ? "hammer.fill" : "shield")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(model.state.preferences.browserUseLocalTestingMode ? .orange : .secondary)
+                .foregroundStyle(isUsingDevMode ? .orange : .secondary)
                 .frame(width: 20, height: 20)
                 .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 6))
 
-            Text("Launch mode:")
+            Text("Dev launch:")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            Text(model.state.preferences.browserUseLocalTestingMode ? "Browser Dev" : "Normal")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(model.state.preferences.browserUseLocalTestingMode ? .orange : .primary)
-                .lineLimit(1)
-
             Spacer(minLength: 8)
 
-            Menu {
-                Picker("Launch Mode", selection: binding) {
-                    Text("Normal").tag(false)
-                    Text("Browser Dev").tag(true)
-                }
-            } label: {
-                Text("Change")
-                    .font(.caption.weight(.semibold))
-            }
-            .menuStyle(.borderlessButton)
+            Toggle("Browser", isOn: browserDevBinding)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .help("Allow local browser testing with BROWSER_USE_SECURITY_MODE=disabled-for-local-testing")
+                .fixedSize()
+
+            Toggle("App", isOn: appDevBinding)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .help("Launch Codex Desktop with BUILD_FLAVOR=dev")
             .fixedSize()
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(
-            model.state.preferences.browserUseLocalTestingMode ? Color.orange.opacity(0.10) : Color.secondary.opacity(0.08),
+            isUsingDevMode ? Color.orange.opacity(0.10) : Color.secondary.opacity(0.08),
             in: RoundedRectangle(cornerRadius: 10)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(model.state.preferences.browserUseLocalTestingMode ? Color.orange.opacity(0.22) : Color.secondary.opacity(0.12))
+                .stroke(isUsingDevMode ? Color.orange.opacity(0.22) : Color.secondary.opacity(0.12))
         )
     }
 }
@@ -2738,12 +2876,19 @@ struct NewHomeTab: View {
     @Binding var customNameEdited: Bool
     @Binding var customPath: String
     @Binding var customPathEdited: Bool
+    @Binding var createsTemporaryHome: Bool
+    var isCreating: Bool
     var suggestedName: String
     var suggestedPath: String
     var create: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Toggle("Temporary home", isOn: $createsTemporaryHome)
+            Text("Mark this home for cleanup review after its Codex session closes. Its setup still follows the option selected below.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
             SectionLabel("Create")
             VStack(spacing: 0) {
                 ForEach(NewHomeMode.allCases) { candidate in
@@ -2798,13 +2943,19 @@ struct NewHomeTab: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(mode.title)
                         .font(.caption.weight(.semibold))
-                    Text(mode.showsCloneOptions ? model.state.preferences.clonePolicies.summary : "No copy options needed.")
+                    Text(mode.showsCloneOptions ? model.state.preferences.clonePolicies.summary : "Starts empty.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Create", action: create)
+                Button(action: create) {
+                    HStack(spacing: 6) {
+                        if isCreating { ProgressView().controlSize(.small) }
+                        Text(isCreating ? "Creating…" : "Create")
+                    }
+                }
                     .buttonStyle(.borderedProminent)
+                    .disabled(isCreating)
             }
             .padding(12)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
@@ -3084,6 +3235,16 @@ struct SettingsTab: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
             }
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Desktop app dev flavor", isOn: Binding(
+                    get: { model.state.preferences.desktopAppDevFlavor },
+                    set: { model.setDesktopAppDevFlavor($0) }
+                ))
+                Text("Launches Codex Desktop with BUILD_FLAVOR=dev to expose app developer and debug UI.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
             SectionLabel("Model Routing")
             ShimSetupCard()
             SectionLabel("Install")
@@ -3092,7 +3253,7 @@ struct SettingsTab: View {
             HStack {
                 Button("Open Console", action: openConsole)
                 Spacer()
-                Button("Quit", action: quit)
+                Button("Quit Multihome", action: quit)
             }
             .buttonStyle(.bordered)
             Button("Reset Defaults") {
@@ -3317,7 +3478,7 @@ struct FocusedHomeView: View {
                 } else if let materialization = home.cloneMaterialization {
                     DetailInfoRow(symbol: "doc.on.doc", title: "Clone Mode", subtitle: materialization.displayName)
                 }
-                let missingLinks = model.service.brokenLinkedTargets(for: home)
+                let missingLinks = model.brokenLinkedTargets[home.id] ?? []
                 if !missingLinks.isEmpty {
                     DetailInfoRow(symbol: "link.badge.plus", title: "Linked Paths Missing", subtitle: missingLinks.joined(separator: ", "), tint: .orange)
                 }
@@ -3711,29 +3872,23 @@ struct HomeListRow: View {
                 }
             }
             Button(action: openDetail) {
-                HStack(spacing: 10) {
-                    Image(systemName: homeKindIcon(for: home))
-                        .frame(width: 24, height: 24)
-                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(home.name)
-                                .font(.caption.weight(.semibold))
-                                .lineLimit(1)
-                                .layoutPriority(1)
-                            HomeTags(home: home, compact: true)
-                            HomeAuthTag(home: home, compact: true)
-                        }
-                        Text(subtitle)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(home.name)
+                            .font(.caption.weight(.semibold))
                             .lineLimit(1)
+                            .layoutPriority(1)
+                        HomePillStrip(home: home)
                     }
-                    Spacer(minLength: 0)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .help("Open details for \(home.name)")
             LaunchActionPair(launch: launch)
                 .opacity(isEditing ? 0.45 : 1)
         }
@@ -3771,14 +3926,49 @@ struct TagChip: View {
     }
 }
 
+struct HomeKindTag: View {
+    var home: CodexHome
+
+    var body: some View {
+        TagChip(
+            label: kindLabel(for: home),
+            symbol: homeKindIcon(for: home),
+            color: .secondary,
+            backgroundOpacity: 0.08
+        )
+        .help("Home type: \(kindLabel(for: home))")
+    }
+}
+
+struct HomePillStrip: View {
+    @EnvironmentObject var model: HomeportModel
+    var home: CodexHome
+    var showsOpenStatus = false
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                HomeKindTag(home: home)
+                HomeTags(home: home)
+                HomeAuthTag(home: home)
+                if showsOpenStatus {
+                    TagChip(label: "Open", symbol: "circle.fill", color: .green)
+                }
+            }
+            .padding(.vertical, 1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 22)
+        .help("Home details. Scroll horizontally to see additional labels.")
+    }
+}
+
 struct HomeTags: View {
     var home: CodexHome
-    var compact = false
-
     var body: some View {
         HStack(spacing: 4) {
             ForEach(tags, id: \.label) { tag in
-                TagChip(label: tag.label, symbol: tag.symbol, color: tag.color, compact: compact)
+                TagChip(label: tag.label, symbol: tag.symbol, color: tag.color)
             }
         }
     }
@@ -3812,16 +4002,14 @@ struct HomeTags: View {
 struct HomeAuthTag: View {
     @EnvironmentObject var model: HomeportModel
     var home: CodexHome
-    var compact = false
-
     var body: some View {
         TagChip(
             label: display.label,
             symbol: display.symbol,
             color: display.color,
-            compact: compact,
             backgroundOpacity: display.backgroundOpacity
         )
+        .help("Sign-in status: \(display.label)")
     }
 
     private var display: (label: String, symbol: String, color: Color, backgroundOpacity: Double) {
@@ -3849,36 +4037,24 @@ struct RecentLaunchRow: View {
                     .foregroundStyle(.red)
                     .frame(width: 20)
             }
-            HStack(spacing: 10) {
-                Image(systemName: resolvedHome.map(homeKindIcon(for:)) ?? "clock.arrow.circlepath")
-                    .frame(width: 24, height: 24)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text("\(instance.homeName) • \(targetLabel(instance.target))")
-                            .font(.caption.weight(.semibold))
-                            .lineLimit(1)
-                            .layoutPriority(1)
-                        if let home = resolvedHome {
-                            HomeTags(home: home, compact: true)
-                            HomeAuthTag(home: home, compact: true)
-                        }
-                    }
-                    Text("\(relativeTime(instance.launchedAt)) • \(instance.workspacePath ?? "no workspace")")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(instance.homeName)
+                        .font(.caption.weight(.semibold))
                         .lineLimit(1)
+                        .layoutPriority(1)
+                    if let home = resolvedHome {
+                        HomePillStrip(home: home, showsOpenStatus: showsStatus)
+                    } else if showsStatus {
+                        TagChip(label: "Open", symbol: "circle.fill", color: .green)
+                    }
                 }
-                Spacer(minLength: 0)
+                Text("\(targetLabel(instance.target)) • \(relativeTime(instance.launchedAt)) • \(instance.workspacePath ?? "no workspace")")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            if showsStatus {
-                Text("Open")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.green)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(Color.green.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
-            }
+            .help("Recent launch for \(instance.homeName)")
             LaunchActionPair { target in
                 model.launchRecent(instance, target: target)
             }

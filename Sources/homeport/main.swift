@@ -172,13 +172,24 @@ func clone(_ arguments: [String]) throws {
         ?? positionalName(in: arguments)
         ?? homePath.flatMap(suggestedHomeName(fromHomePath:))
         ?? "Multihome Clone"
-    let home = try service.clone(
-        name: name,
-        preset: preset,
-        policies: clonePolicies,
-        sourceSelector: sourceSelector,
-        homePath: homePath
-    )
+    let home: CodexHome
+    if arguments.contains("--temporary") {
+        home = try service.createTemporary(
+            name: name,
+            homePath: homePath,
+            policies: clonePolicies,
+            sourceSelector: sourceSelector,
+            preset: preset
+        )
+    } else {
+        home = try service.clone(
+            name: name,
+            preset: preset,
+            policies: clonePolicies,
+            sourceSelector: sourceSelector,
+            homePath: homePath
+        )
+    }
     printCreatedHome(home)
 }
 
@@ -605,11 +616,14 @@ func configure(_ arguments: [String]) throws {
 
     if let localTestingMode = option(arguments, "--browser-use-local-testing") {
         let isEnabled = try strictBoolValue(localTestingMode, optionName: "--browser-use-local-testing")
-        var state = try service.loadState()
-        state.preferences.browserUseLocalTestingMode = isEnabled
-        try service.saveState(state)
-        try setBrowserUseLocalTestingModeInConfig(in: service.paths.mainCodexHome, isEnabled: isEnabled)
+        try service.setBrowserUseLocalTestingMode(isEnabled)
         print("Browser Use local testing mode: \(isEnabled)")
+    }
+
+    if let appDevFlavor = option(arguments, "--desktop-app-dev-flavor") {
+        let isEnabled = try strictBoolValue(appDevFlavor, optionName: "--desktop-app-dev-flavor")
+        try service.setDesktopAppDevFlavor(isEnabled)
+        print("Desktop app dev flavor: \(isEnabled)")
     }
 
     if let updateChecks = option(arguments, "--update-checks") {
@@ -668,6 +682,7 @@ func configure(_ arguments: [String]) throws {
         let computerUseDefault = ComputerUseDefaults.readAllowForbiddenTargets().map(String.init(describing:)) ?? "unset"
         print("Current macOS Computer Use target default: \(computerUseDefault)")
         print("Browser Use local testing mode: \(state.preferences.browserUseLocalTestingMode)")
+        print("Desktop app dev flavor: \(state.preferences.desktopAppDevFlavor)")
         print("Update checks enabled: \(state.preferences.autoUpdateChecksEnabled)")
         print("Update interval: \(state.preferences.updateCheckInterval.rawValue)")
         print("Auto-install updates: \(state.preferences.autoInstallUpdates)")
@@ -1239,7 +1254,7 @@ Create a named managed Codex home. By default homes live under ~/.codex-homes;
 pass --path to choose a different CODEX_HOME destination.
 
 Usage:
-  homeport clone --preset working-setup|config-only|everything|empty --name NAME [--path PATH] [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
+  homeport clone --preset working-setup|config-only|everything|empty --name NAME [--temporary] [--path PATH] [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
 
 Presets:
   working-setup   Config, auth, skills, plugins, MCP-related files; no sessions/logs.
@@ -1249,6 +1264,7 @@ Presets:
 
 Examples:
   homeport clone --preset working-setup --name "Plugin Lab"
+  homeport clone --preset working-setup --name "Disposable Plugin Lab" --temporary
   homeport clone --preset working-setup --name "Plugin Lab" --path ~/codex-homes/plugin-lab
   homeport clone --preset config-only --name "No Auth Test"
   homeport clone --preset empty --name "Blank Slate"
@@ -1525,6 +1541,7 @@ Options:
   --allow-forbidden-computer-use-targets on|off
                                         Set Apple's global Computer Use target default.
   --browser-use-local-testing on|off    Launch Codex with BROWSER_USE_SECURITY_MODE=disabled-for-local-testing.
+  --desktop-app-dev-flavor on|off       Launch Codex Desktop with BUILD_FLAVOR=dev.
   --update-checks on|off                Enable proactive npm update checks.
   --update-interval daily|weekly        How often the app checks for updates.
   --auto-install-updates on|off         Install available updates without prompting.

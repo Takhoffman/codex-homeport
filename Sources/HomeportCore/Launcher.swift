@@ -16,14 +16,16 @@ public struct Launcher {
         workspace: String?,
         terminal: TerminalApp,
         appBundle: URL? = nil,
-        browserUseLocalTestingMode: Bool = false
+        browserUseLocalTestingMode: Bool = false,
+        desktopAppDevFlavor: Bool = false
     ) throws -> Int32? {
         switch target {
         case .desktop:
             return try launchDesktop(
                 home: home,
                 appBundle: appBundle,
-                browserUseLocalTestingMode: browserUseLocalTestingMode
+                browserUseLocalTestingMode: browserUseLocalTestingMode,
+                desktopAppDevFlavor: desktopAppDevFlavor
             )
         case .terminal:
             return try launchTerminal(
@@ -35,7 +37,12 @@ public struct Launcher {
         }
     }
 
-    private func launchDesktop(home: CodexHome, appBundle: URL?, browserUseLocalTestingMode: Bool) throws -> Int32? {
+    private func launchDesktop(
+        home: CodexHome,
+        appBundle: URL?,
+        browserUseLocalTestingMode: Bool,
+        desktopAppDevFlavor: Bool
+    ) throws -> Int32? {
         let homeURL = URL(fileURLWithPath: home.homePath)
         guard fileManager.fileExists(atPath: homeURL.path) else {
             throw HomeportError.homeDoesNotExist(homeURL.path)
@@ -74,6 +81,7 @@ public struct Launcher {
         var environment = ProcessInfo.processInfo.environment
         environment["CODEX_HOME"] = home.homePath
         applyBrowserUseLocalTestingMode(browserUseLocalTestingMode, to: &environment)
+        applyDesktopAppDevFlavor(desktopAppDevFlavor, to: &environment)
 
         let app = try NSWorkspace.shared.launchApplication(
             at: bundle,
@@ -242,6 +250,14 @@ func applyBrowserUseLocalTestingMode(_ isEnabled: Bool, to environment: inout [S
         environment["BROWSER_USE_SECURITY_MODE"] = "disabled-for-local-testing"
     } else {
         environment.removeValue(forKey: "BROWSER_USE_SECURITY_MODE")
+    }
+}
+
+func applyDesktopAppDevFlavor(_ isEnabled: Bool, to environment: inout [String: String]) {
+    if isEnabled {
+        environment["BUILD_FLAVOR"] = "dev"
+    } else {
+        environment.removeValue(forKey: "BUILD_FLAVOR")
     }
 }
 
