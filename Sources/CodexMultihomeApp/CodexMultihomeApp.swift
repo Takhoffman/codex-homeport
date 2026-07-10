@@ -2884,11 +2884,6 @@ struct NewHomeTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Toggle("Temporary home", isOn: $createsTemporaryHome)
-            Text("Mark this home for cleanup review after its Codex session closes. Its setup still follows the option selected below.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
             SectionLabel("Create")
             VStack(spacing: 0) {
                 ForEach(NewHomeMode.allCases) { candidate in
@@ -2906,6 +2901,18 @@ struct NewHomeTab: View {
             }
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.13)))
+            SectionLabel("Keep For")
+            Picker("Keep For", selection: $createsTemporaryHome) {
+                Text("Saved").tag(false)
+                Text("Temporary").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .help("Saved homes remain until you delete them. Temporary homes are offered for cleanup after their session closes.")
+            Text(createsTemporaryHome
+                ? "Temporary homes are offered for cleanup after their session closes."
+                : "Saved homes remain available until you delete them.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             SectionLabel("Opens In")
             Picker("Opens In", selection: $launchTarget) {
                 Text("Desktop App").tag(LaunchTarget.desktop)
@@ -3871,28 +3878,32 @@ struct HomeListRow: View {
                         .help(editActionHelp)
                 }
             }
-            Button(action: openDetail) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Button(action: openDetail) {
                         Text(home.name)
                             .font(.caption.weight(.semibold))
                             .lineLimit(1)
-                            .layoutPriority(1)
-                        HomePillStrip(home: home)
                     }
+                    .buttonStyle(.plain)
+                    .help("Open details for \(home.name)")
+                    Spacer(minLength: 8)
+                    LaunchActionPair(launch: launch)
+                        .opacity(isEditing ? 0.45 : 1)
+                }
+                Button(action: openDetail) {
                     Text(subtitle)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .help("Open details for \(home.name)")
+                HomePillStrip(home: home)
             }
-            .buttonStyle(.plain)
-            .help("Open details for \(home.name)")
-            LaunchActionPair(launch: launch)
-                .opacity(isEditing ? 0.45 : 1)
         }
-        .padding(10)
+        .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
     }
@@ -3904,6 +3915,7 @@ struct TagChip: View {
     var color: Color
     var compact = false
     var backgroundOpacity: Double = 0.12
+    var helpText: String? = nil
 
     var body: some View {
         Group {
@@ -3922,7 +3934,7 @@ struct TagChip: View {
         .padding(.horizontal, compact ? 4 : 5)
         .padding(.vertical, 2)
         .background(color.opacity(backgroundOpacity), in: RoundedRectangle(cornerRadius: 5))
-        .help(label)
+        .help(helpText ?? label)
     }
 }
 
@@ -3934,9 +3946,9 @@ struct HomeKindTag: View {
             label: kindLabel(for: home),
             symbol: homeKindIcon(for: home),
             color: .secondary,
-            backgroundOpacity: 0.08
+            backgroundOpacity: 0.08,
+            helpText: "Home type: \(kindLabel(for: home))."
         )
-        .help("Home type: \(kindLabel(for: home))")
     }
 }
 
@@ -3946,20 +3958,53 @@ struct HomePillStrip: View {
     var showsOpenStatus = false
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                HomeKindTag(home: home)
-                HomeTags(home: home)
-                HomeAuthTag(home: home)
-                if showsOpenStatus {
-                    TagChip(label: "Open", symbol: "circle.fill", color: .green)
+        ScrollViewReader { proxy in
+            HStack(spacing: 2) {
+                pillScrollButton(symbol: "chevron.left", help: "Show earlier labels") {
+                    withAnimation { proxy.scrollTo("pill-strip-start", anchor: .leading) }
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        Color.clear
+                            .frame(width: 1, height: 1)
+                            .id("pill-strip-start")
+                        HomeKindTag(home: home)
+                        HomeTags(home: home)
+                        HomeAuthTag(home: home)
+                        if showsOpenStatus {
+                            TagChip(
+                                label: "Open",
+                                symbol: "circle.fill",
+                                color: .green,
+                                helpText: "This launch is currently open."
+                            )
+                        }
+                        Color.clear
+                            .frame(width: 1, height: 1)
+                            .id("pill-strip-end")
+                    }
+                    .padding(.vertical, 1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help("Swipe or scroll horizontally to see more labels.")
+                pillScrollButton(symbol: "chevron.right", help: "Show later labels") {
+                    withAnimation { proxy.scrollTo("pill-strip-end", anchor: .trailing) }
                 }
             }
-            .padding(.vertical, 1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 22)
-        .help("Home details. Scroll horizontally to see additional labels.")
+        .frame(height: 24)
+    }
+
+    private func pillScrollButton(symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .bold))
+                .frame(width: 16, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(help)
     }
 }
 
@@ -3968,30 +4013,30 @@ struct HomeTags: View {
     var body: some View {
         HStack(spacing: 4) {
             ForEach(tags, id: \.label) { tag in
-                TagChip(label: tag.label, symbol: tag.symbol, color: tag.color)
+                TagChip(label: tag.label, symbol: tag.symbol, color: tag.color, helpText: tag.help)
             }
         }
     }
 
-    private var tags: [(label: String, symbol: String, color: Color)] {
-        var tags: [(label: String, symbol: String, color: Color)] = []
+    private var tags: [(label: String, symbol: String, color: Color, help: String)] {
+        var tags: [(label: String, symbol: String, color: Color, help: String)] = []
         if home.modelRouting?.isEnabled == true {
-            tags.append(("Routed", "point.3.connected.trianglepath.dotted", .indigo))
+            tags.append(("Routed", "point.3.connected.trianglepath.dotted", .indigo, "Model routing through codex-shim is enabled for this home."))
         }
         if let policies = home.clonePolicies {
             if policies.linkedCategoryCount > 0 {
-                tags.append(("\(policies.linkedCategoryCount) linked", "link", policies.auth == .link ? .orange : .blue))
+                tags.append(("\(policies.linkedCategoryCount) linked", "link", policies.auth == .link ? .orange : .blue, "\(policies.linkedCategoryCount) setup categories stay connected to their source."))
             }
             if policies.copiedCategoryCount > 0 && policies.linkedCategoryCount > 0 {
-                tags.append(("\(policies.copiedCategoryCount) copied", "doc.on.doc", .secondary))
+                tags.append(("\(policies.copiedCategoryCount) copied", "doc.on.doc", .secondary, "\(policies.copiedCategoryCount) setup categories were copied into this home."))
             }
             return tags
         }
         switch home.cloneMaterialization {
         case .linkSafeCustomizations:
-            tags.append(("Linked", "link", .blue))
+            tags.append(("Linked", "link", .blue, "Safe customizations stay connected to the source home."))
         case .linkSafeCustomizationsAndAuth:
-            tags.append(("Auth linked", "key.fill", .orange))
+            tags.append(("Auth linked", "key.fill", .orange, "This home shares sign-in credentials with its source home."))
         case .copy, nil:
             break
         }
@@ -4007,9 +4052,9 @@ struct HomeAuthTag: View {
             label: display.label,
             symbol: display.symbol,
             color: display.color,
-            backgroundOpacity: display.backgroundOpacity
+            backgroundOpacity: display.backgroundOpacity,
+            helpText: "Sign-in status: \(display.label)."
         )
-        .help("Sign-in status: \(display.label)")
     }
 
     private var display: (label: String, symbol: String, color: Color, backgroundOpacity: Double) {
@@ -4037,30 +4082,35 @@ struct RecentLaunchRow: View {
                     .foregroundStyle(.red)
                     .frame(width: 20)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
                     Text(instance.homeName)
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
-                        .layoutPriority(1)
-                    if let home = resolvedHome {
-                        HomePillStrip(home: home, showsOpenStatus: showsStatus)
-                    } else if showsStatus {
-                        TagChip(label: "Open", symbol: "circle.fill", color: .green)
+                    Spacer(minLength: 8)
+                    LaunchActionPair { target in
+                        model.launchRecent(instance, target: target)
                     }
+                    .opacity(isEditing ? 0.45 : 1)
                 }
                 Text("\(targetLabel(instance.target)) • \(relativeTime(instance.launchedAt)) • \(instance.workspacePath ?? "no workspace")")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                if let home = resolvedHome {
+                    HomePillStrip(home: home, showsOpenStatus: showsStatus)
+                } else if showsStatus {
+                    TagChip(
+                        label: "Open",
+                        symbol: "circle.fill",
+                        color: .green,
+                        helpText: "This launch is currently open."
+                    )
+                }
             }
             .help("Recent launch for \(instance.homeName)")
-            LaunchActionPair { target in
-                model.launchRecent(instance, target: target)
-            }
-            .opacity(isEditing ? 0.45 : 1)
         }
-        .padding(10)
+        .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
     }
