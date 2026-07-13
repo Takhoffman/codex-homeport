@@ -559,6 +559,24 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertFalse(arguments.contains("no_proxy="))
     }
 
+    func testExistingCustomDesktopProcessMatchesBundleAndShimProfile() {
+        let launcher = Launcher()
+        let listing = """
+          101 /Applications/Codex Shim.app/Contents/Frameworks/Codex Helper.app/Contents/MacOS/Codex Helper --user-data-dir=/tmp/profile-shim
+          202 /Applications/Codex Shim.app/Contents/MacOS/Codex --user-data-dir=/tmp/other-profile-shim
+          303 /Applications/Codex Shim.app/Contents/MacOS/ChatGPT --user-data-dir=/tmp/profile-shim
+        """
+
+        XCTAssertEqual(
+            launcher.existingCustomDesktopProcessPID(
+                processListing: listing,
+                bundlePath: "/Applications/Codex Shim.app",
+                profilePath: "/tmp/profile-shim"
+            ),
+            303
+        )
+    }
+
     func testCachedBrowserSkillPatchAddsStatelessRedditScreenshotSmoke() throws {
         let root = try makeTempRoot()
         let home = root.appendingPathComponent(".codex-home", isDirectory: true)
@@ -630,6 +648,118 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertTrue(text.contains("[plugins.\"browser@openai-bundled\"]\nenabled = true"))
         XCTAssertTrue(text.contains("[plugins.\"chrome@openai-bundled\"]\nenabled = true"))
         XCTAssertTrue(text.contains("[plugins.\"computer-use@openai-bundled\"]\nenabled = true"))
+        XCTAssertTrue(text.contains("[marketplaces.openai-bundled]\nsource_type = \"local\""))
+        XCTAssertTrue(text.contains("source = \"\(home.path)/.tmp/bundled-marketplaces/openai-bundled\""))
+    }
+
+    func testShimLaunchReplacesExistingBundledMarketplaceTable() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let config = home.appendingPathComponent("config.toml")
+        try """
+        [marketplaces.openai-bundled]
+        source_type = "local"
+        source = "/stale/source"
+
+        [desktop]
+        conversationDetailMode = "STEPS_PROSE"
+        """.write(to: config, atomically: true, encoding: .utf8)
+
+        try enableBundledBrowserPluginsForShim(in: home)
+        try enableBundledBrowserPluginsForShim(in: home)
+
+        let text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertEqual(text.components(separatedBy: "[marketplaces.openai-bundled]").count, 2)
+        XCTAssertFalse(text.contains("/stale/source"))
+        XCTAssertTrue(text.contains("[desktop]\nconversationDetailMode = \"STEPS_PROSE\""))
+    }
+
+    func testShimLaunchPreservesTablesInsertedInsideLegacyManagedMarkers() throws {
+        let root = try makeTempRoot()
+        let home = root.appendingPathComponent(".codex-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let config = home.appendingPathComponent("config.toml")
+        try """
+        \(shimBundledBrowserPluginsBegin)
+        [plugins."browser@openai-bundled"]
+        enabled = true
+
+        [plugins."documents@openai-primary-runtime"]
+        enabled = true
+        \(shimBundledBrowserPluginsEnd)
+        """.write(to: config, atomically: true, encoding: .utf8)
+
+        try enableBundledBrowserPluginsForShim(in: home)
+
+        let text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertTrue(text.contains("[plugins.\"documents@openai-primary-runtime\"]\nenabled = true"))
+        XCTAssertEqual(text.components(separatedBy: "[plugins.\"browser@openai-bundled\"]").count, 2)
+    }
+
+    func testShimHydratesMissingBundledBrowserPluginsFromMainHome() throws {
+        let root = try makeTempRoot()
+        let sourceHome = root.appendingPathComponent(".codex", isDirectory: true)
+        let destinationHome = root.appendingPathComponent(".codex-home", isDirectory: true)
+        for pluginName in shimBundledBrowserPluginNames {
+            let pluginVersion = sourceHome
+                .appendingPathComponent("plugins/cache/openai-bundled/\(pluginName)/1.0.0", isDirectory: true)
+            try FileManager.default.createDirectory(at: pluginVersion, withIntermediateDirectories: true)
+            try pluginName.write(
+                to: pluginVersion.appendingPathComponent("plugin.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+        let marketplace = sourceHome
+            .appendingPathComponent(".tmp/bundled-marketplaces/openai-bundled/.agents/plugins", isDirectory: true)
+        try FileManager.default.createDirectory(at: marketplace, withIntermediateDirectories: true)
+        try "{}".write(
+            to: marketplace.appendingPathComponent("marketplace.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        try hydrateBundledBrowserPluginsForShim(from: sourceHome, to: destinationHome)
+        try hydrateBundledBrowserPluginsForShim(from: sourceHome, to: destinationHome)
+
+        for pluginName in shimBundledBrowserPluginNames {
+            let copied = destinationHome
+                .appendingPathComponent("plugins/cache/openai-bundled/\(pluginName)/1.0.0/plugin.txt")
+            XCTAssertEqual(try String(contentsOf: copied, encoding: .utf8), pluginName)
+        }
+        let copiedMarketplace = destinationHome
+            .appendingPathComponent(".tmp/bundled-marketplaces/openai-bundled/.agents/plugins/marketplace.json")
+        XCTAssertEqual(try String(contentsOf: copiedMarketplace, encoding: .utf8), "{}")
+    }
+
+    func testShimHydrationKeepsExistingPluginVersionAndAddsNewVersion() throws {
+        let root = try makeTempRoot()
+        let sourceHome = root.appendingPathComponent(".codex", isDirectory: true)
+        let destinationHome = root.appendingPathComponent(".codex-home", isDirectory: true)
+        let sourceVersion = sourceHome
+            .appendingPathComponent("plugins/cache/openai-bundled/browser/2.0.0", isDirectory: true)
+        let existingVersion = destinationHome
+            .appendingPathComponent("plugins/cache/openai-bundled/browser/1.0.0", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceVersion, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: existingVersion, withIntermediateDirectories: true)
+        try "new".write(to: sourceVersion.appendingPathComponent("plugin.txt"), atomically: true, encoding: .utf8)
+        try "existing".write(to: existingVersion.appendingPathComponent("plugin.txt"), atomically: true, encoding: .utf8)
+
+        try hydrateBundledBrowserPluginsForShim(from: sourceHome, to: destinationHome)
+
+        XCTAssertEqual(
+            try String(contentsOf: existingVersion.appendingPathComponent("plugin.txt"), encoding: .utf8),
+            "existing"
+        )
+        XCTAssertEqual(
+            try String(
+                contentsOf: destinationHome
+                    .appendingPathComponent("plugins/cache/openai-bundled/browser/2.0.0/plugin.txt"),
+                encoding: .utf8
+            ),
+            "new"
+        )
     }
 
     func testDefaultInstallEnablesBundledComputerUsePluginInMainConfig() throws {

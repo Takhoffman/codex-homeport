@@ -77,8 +77,23 @@ public struct Launcher {
         if appBundle != nil, let profilePath = home.profilePath {
             let shimProfilePath = "\(profilePath)-shim"
             try fileManager.createDirectory(at: URL(fileURLWithPath: shimProfilePath), withIntermediateDirectories: true)
+            try hydrateBundledBrowserPluginsForShim(
+                from: paths.mainCodexHome,
+                to: homeURL,
+                fileManager: fileManager
+            )
             try enableBundledBrowserPluginsForShim(in: homeURL)
             try patchCachedBrowserSkillForStatelessIAB(in: homeURL, fileManager: fileManager)
+            try ComputerUseDefaults.applyInstallSupport(in: homeURL, isEnabled: true, fileManager: fileManager)
+            // Reuse the live shim session instead of killing it. Restarting Codex while a
+            // Computer Use permission card is pending leaves a persisted "Awaiting approval"
+            // badge whose in-memory approval request no longer exists.
+            if let existingPID = findCodexProcess(bundlePath: bundle.path, profilePath: shimProfilePath) {
+                NSRunningApplication(processIdentifier: existingPID)?.activate(
+                    options: [.activateAllWindows, .activateIgnoringOtherApps]
+                )
+                return existingPID
+            }
             terminateCodexProcesses(usingProfilePath: shimProfilePath)
             return try launchCustomDesktopBundle(
                 bundle: bundle,
@@ -193,12 +208,26 @@ public struct Launcher {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard let output = String(data: data, encoding: .utf8) else { return nil }
-        for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
+        return existingCustomDesktopProcessPID(
+            processListing: output,
+            bundlePath: bundlePath,
+            profilePath: profilePath
+        )
+    }
+
+    func existingCustomDesktopProcessPID(
+        processListing: String,
+        bundlePath: String,
+        profilePath: String
+    ) -> Int32? {
+        for line in processListing.split(separator: "\n", omittingEmptySubsequences: true) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard let space = trimmed.firstIndex(where: { $0 == " " || $0 == "\t" }) else { continue }
             guard let pid = Int32(trimmed[..<space]) else { continue }
             let args = trimmed[space...]
-            guard args.contains("\(bundlePath)/Contents/MacOS/Codex") else { continue }
+            // The renamed shim bundle currently retains ChatGPT as CFBundleExecutable.
+            // Match the bundle's main executable directory instead of assuming "Codex".
+            guard args.contains("\(bundlePath)/Contents/MacOS/") else { continue }
             guard args.contains("--user-data-dir=\(profilePath)") else { continue }
             return pid
         }
@@ -393,6 +422,7 @@ let statelessIABWorkflowMarker = "## Stateless In-App Browser Calls"
 let statelessIABWorkflowEndMarker = "<!-- codex-multihome-stateless-iab-end -->"
 let shimBundledBrowserPluginsBegin = "# >>> codex-multihome shim bundled browser plugins >>>"
 let shimBundledBrowserPluginsEnd = "# <<< codex-multihome shim bundled browser plugins <<<"
+let shimBundledBrowserPluginNames = ["browser", "chrome", "computer-use"]
 
 let statelessIABWorkflowInstructions = """
 
@@ -456,8 +486,55 @@ func removeStatelessIABWorkflowInstructions(from text: String) -> String {
     return String(text[..<beginRange.lowerBound])
 }
 
+func hydrateBundledBrowserPluginsForShim(
+    from sourceHomeURL: URL,
+    to destinationHomeURL: URL,
+    fileManager: FileManager = .default
+) throws {
+    let sourceRoot = sourceHomeURL.appendingPathComponent("plugins/cache/openai-bundled", isDirectory: true)
+    guard fileManager.fileExists(atPath: sourceRoot.path) else { return }
+
+    let destinationRoot = destinationHomeURL.appendingPathComponent("plugins/cache/openai-bundled", isDirectory: true)
+    try fileManager.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
+
+    for pluginName in shimBundledBrowserPluginNames {
+        let sourcePlugin = sourceRoot.appendingPathComponent(pluginName, isDirectory: true)
+        guard fileManager.fileExists(atPath: sourcePlugin.path) else { continue }
+
+        let destinationPlugin = destinationRoot.appendingPathComponent(pluginName, isDirectory: true)
+        try fileManager.createDirectory(at: destinationPlugin, withIntermediateDirectories: true)
+        let versions = try fileManager.contentsOfDirectory(
+            at: sourcePlugin,
+            includingPropertiesForKeys: nil,
+            options: [.skipsSubdirectoryDescendants]
+        )
+        for version in versions {
+            let destinationVersion = destinationPlugin.appendingPathComponent(version.lastPathComponent)
+            guard !fileManager.fileExists(atPath: destinationVersion.path) else { continue }
+            try fileManager.copyItem(at: version, to: destinationVersion)
+        }
+    }
+
+    let sourceMarketplace = sourceHomeURL
+        .appendingPathComponent(".tmp/bundled-marketplaces/openai-bundled", isDirectory: true)
+    guard fileManager.fileExists(atPath: sourceMarketplace.path) else { return }
+    let destinationMarketplace = destinationHomeURL
+        .appendingPathComponent(".tmp/bundled-marketplaces/openai-bundled", isDirectory: true)
+    try fileManager.createDirectory(
+        at: destinationMarketplace.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    if fileManager.fileExists(atPath: destinationMarketplace.path) {
+        try fileManager.removeItem(at: destinationMarketplace)
+    }
+    try fileManager.copyItem(at: sourceMarketplace, to: destinationMarketplace)
+}
+
 func enableBundledBrowserPluginsForShim(in homeURL: URL, fileManager: FileManager = .default) throws {
     let configURL = homeURL.appendingPathComponent("config.toml")
+    let marketplaceSource = homeURL
+        .appendingPathComponent(".tmp/bundled-marketplaces/openai-bundled", isDirectory: true)
+        .path
     let pluginBlock = """
 
 \(shimBundledBrowserPluginsBegin)
@@ -469,20 +546,60 @@ enabled = true
 
 [plugins."computer-use@openai-bundled"]
 enabled = true
+
+[marketplaces.openai-bundled]
+source_type = "local"
+source = "\(marketplaceSource)"
 \(shimBundledBrowserPluginsEnd)
 """
 
     let existing = fileManager.fileExists(atPath: configURL.path)
         ? try String(contentsOf: configURL, encoding: .utf8)
         : ""
-    let cleaned = removeMarkedBlock(
-        from: existing,
-        begin: shimBundledBrowserPluginsBegin,
-        end: shimBundledBrowserPluginsEnd
-    ).trimmingCharacters(in: .whitespacesAndNewlines)
+    var cleaned = removeLines(
+        [shimBundledBrowserPluginsBegin, shimBundledBrowserPluginsEnd],
+        from: existing
+    )
+    for tableName in [
+        "plugins.\"browser@openai-bundled\"",
+        "plugins.\"chrome@openai-bundled\"",
+        "plugins.\"computer-use@openai-bundled\"",
+        "marketplaces.openai-bundled"
+    ] {
+        cleaned = removeTOMLTable(named: tableName, from: cleaned)
+    }
+    cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     let next = cleaned.isEmpty ? pluginBlock.trimmingCharacters(in: .newlines) + "\n" : cleaned + "\n" + pluginBlock + "\n"
     try fileManager.createDirectory(at: homeURL, withIntermediateDirectories: true)
     try next.write(to: configURL, atomically: true, encoding: .utf8)
+}
+
+func removeLines(_ removedLines: Set<String>, from text: String) -> String {
+    text.split(separator: "\n", omittingEmptySubsequences: false)
+        .map(String.init)
+        .filter { !removedLines.contains($0.trimmingCharacters(in: .whitespaces)) }
+        .joined(separator: "\n")
+}
+
+func removeTOMLTable(named tableName: String, from text: String) -> String {
+    let header = "[\(tableName)]"
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    var result: [String] = []
+    var skipping = false
+    for line in lines {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed == header {
+            skipping = true
+            continue
+        }
+        if skipping, trimmed.hasPrefix("["), trimmed.hasSuffix("]") {
+            skipping = false
+        }
+        if !skipping {
+            result.append(line)
+        }
+    }
+    return result.joined(separator: "\n")
 }
 
 func removeMarkedBlock(from text: String, begin: String, end: String) -> String {
