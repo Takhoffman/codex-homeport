@@ -121,10 +121,29 @@ Model routing uses a cleaned `codex-shim` runtime bundled inside the Multihome
 app; it does not require a separate checkout or globally installed
 `codex-shim` executable. Published packages embed checksum-verified standalone
 CPython runtimes for Apple Silicon and Intel Macs plus pinned `aiohttp`
-dependencies. Routing then runs offline: it needs neither a system Python nor
+dependencies. Starting the bundled routing runtime needs neither a system
+Python nor dependency downloads; requests to remote model providers still need
 network access. Source checkouts prepare the host runtime during installation.
-Settings keeps an optional Shim executable override for an intentionally
-managed external runtime.
+Settings keeps an optional Shim executable override for an intentionally managed
+external runtime.
+
+### GitHub Copilot subscription
+
+The shim can run the models included with your GitHub Copilot subscription
+inside the Codex Desktop or CLI harness. Install the GitHub Copilot CLI, run
+`copilot login`, then open a home's **Model Routing** panel:
+
+1. Enable **Route models through shim** and **GitHub Copilot**.
+2. Use the Copilot **Login** button if you have not already signed in.
+3. Choose **Restart**, then open **Model Picker** and select one of the
+   dynamically discovered `copilot-*` models.
+
+The shim uses the Copilot CLI's existing login and never copies or stores its
+token. Codex remains responsible for executing tools and enforcing approvals;
+Copilot supplies the model response. Available models and any quota or premium
+request accounting come from your GitHub Copilot plan. See the
+[shim documentation](Sources/CodexMultihomeApp/Resources/codex-shim/README.md#github-copilot-passthrough-subscription)
+for the CLI setup, limitations, and SDK caveats.
 
 ## Install And Update
 

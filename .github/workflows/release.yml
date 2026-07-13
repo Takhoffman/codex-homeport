@@ -30,6 +30,8 @@ jobs:
           test -f "releases/${GITHUB_REF_NAME}.md"
       - name: Test
         run: swift test
+      - name: Test model-routing bridge
+        run: npm run test:shim
       - name: Check package
         run: npm pack --dry-run
       - name: Check npm version

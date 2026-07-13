@@ -1208,6 +1208,7 @@ final class HomeportModel: ObservableObject {
         Task {
             let statuses = await Task.detached { [environment] in
                 [
+                    ShimLoginProvider.copilot: copilotProviderStatus(environment: environment),
                     ShimLoginProvider.ollama: ollamaProviderStatus(environment: environment),
                     ShimLoginProvider.cursor: cursorProviderStatus(environment: environment)
                 ]
@@ -1392,6 +1393,7 @@ enum CodexShimCommand: String, CaseIterable, Identifiable {
 
 enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
     case codex
+    case copilot
     case ollama
     case cursor
 
@@ -1404,6 +1406,7 @@ enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .codex: "Codex"
+        case .copilot: "GitHub Copilot"
         case .ollama: "Ollama"
         case .cursor: "Cursor"
         }
@@ -1412,6 +1415,7 @@ enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
     var symbol: String {
         switch self {
         case .codex: "key.fill"
+        case .copilot: "chevron.left.forwardslash.chevron.right"
         case .ollama: "cloud.fill"
         case .cursor: "cursorarrow.click.2"
         }
@@ -1420,6 +1424,7 @@ enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
     var detail: String {
         switch self {
         case .codex: "Scoped to selected CODEX_HOME"
+        case .copilot: "Uses the global Copilot CLI login"
         case .ollama: "Uses Ollama Cloud sign-in"
         case .cursor: "Uses cursor-agent session"
         }
@@ -1430,6 +1435,8 @@ enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
         case .codex:
             let homePath = home?.homePath ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
             return "CODEX_HOME=\(shellQuote(homePath)) codex login"
+        case .copilot:
+            return "copilot login"
         case .ollama:
             return "ollama signin"
         case .cursor:
@@ -1440,6 +1447,7 @@ enum ShimLoginProvider: String, CaseIterable, Identifiable, Hashable {
 
 enum ShimProviderState {
     case ready
+    case installed
     case warning
     case missing
     case unknown
@@ -1447,6 +1455,7 @@ enum ShimProviderState {
     var label: String {
         switch self {
         case .ready: "Signed in"
+        case .installed: "Installed"
         case .warning: "Check"
         case .missing: "Needs login"
         case .unknown: "Unknown"
@@ -1456,6 +1465,7 @@ enum ShimProviderState {
     var symbol: String {
         switch self {
         case .ready: "checkmark.seal.fill"
+        case .installed: "checkmark.circle.fill"
         case .warning: "exclamationmark.triangle.fill"
         case .missing: "key.slash"
         case .unknown: "questionmark.circle"
@@ -1465,6 +1475,7 @@ enum ShimProviderState {
     var color: Color {
         switch self {
         case .ready: .blue
+        case .installed: .blue
         case .warning: .orange
         case .missing: .secondary
         case .unknown: .secondary
@@ -1724,6 +1735,12 @@ func buildShimCatalogPlan(enabledProviders: Set<ShimLoginProvider>, environment:
         skipped.append("Ollama disabled")
     }
 
+    if enabledProviders.contains(.copilot) {
+        included.append("GitHub Copilot")
+    } else {
+        skipped.append("GitHub Copilot disabled")
+    }
+
     if enabledProviders.contains(.cursor) {
         included.append("Cursor")
     } else {
@@ -1739,7 +1756,7 @@ func buildShimCatalogPlan(enabledProviders: Set<ShimLoginProvider>, environment:
             "models": models,
             "notes": [
                 "Provider toggles are scoped to this Codex home.",
-                "ChatGPT/Codex and Cursor are discovered by codex-shim from supported login state.",
+                "ChatGPT/Codex, GitHub Copilot, and Cursor are discovered by codex-shim from supported login state.",
                 "Included: \(included.joined(separator: ", "))",
                 "Skipped: \(skipped.joined(separator: ", "))"
             ]
@@ -1761,6 +1778,11 @@ func shimCommandEnvironment(enabledProviders: Set<ShimLoginProvider>) -> [String
         environment.removeValue(forKey: "CODEX_SHIM_DISABLE_CURSOR")
     } else {
         environment["CODEX_SHIM_DISABLE_CURSOR"] = "1"
+    }
+    if enabledProviders.contains(.copilot) {
+        environment.removeValue(forKey: "CODEX_SHIM_DISABLE_COPILOT")
+    } else {
+        environment["CODEX_SHIM_DISABLE_COPILOT"] = "1"
     }
     return environment
 }
@@ -1827,6 +1849,44 @@ func expandUserPath(_ path: String) -> String {
             .path
     }
     return path
+}
+
+func copilotProviderStatus(environment: [String: String]) -> ShimProviderStatus {
+    guard let executable = findExecutable("copilot", extraPaths: []) else {
+        return ShimProviderStatus(state: .missing, detail: "GitHub Copilot CLI not found")
+    }
+
+    // Copilot CLI has no non-agent auth-status command. A version check verifies the
+    // installed binary without spending quota, reading credentials, or starting an agent.
+    var probeEnvironment = environment
+    for key in [
+        "COPILOT_API_URL",
+        "COPILOT_GITHUB_TOKEN",
+        "COPILOT_SDK_AUTH_TOKEN",
+        "GH_TOKEN",
+        "GITHUB_COPILOT_API_TOKEN",
+        "GITHUB_TOKEN",
+    ] {
+        probeEnvironment.removeValue(forKey: key)
+    }
+    probeEnvironment["NO_COLOR"] = "1"
+    let result = runCommand(
+        executable: executable,
+        arguments: ["--no-auto-update", "--no-color", "--version"],
+        environment: probeEnvironment
+    )
+    guard result.succeeded else {
+        return ShimProviderStatus(state: .warning, detail: "Copilot CLI found; version check failed")
+    }
+
+    let version = result.combinedOutput
+        .split(whereSeparator: \.isNewline)
+        .first
+        .map(String.init) ?? "GitHub Copilot CLI installed"
+    return ShimProviderStatus(
+        state: .installed,
+        detail: "\(version) Sign-in is verified when models load."
+    )
 }
 
 func ollamaProviderStatus(environment: [String: String]) -> ShimProviderStatus {

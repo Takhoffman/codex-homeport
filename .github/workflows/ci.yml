@@ -14,6 +14,8 @@ jobs:
         run: swift --version
       - name: Build and test
         run: swift test
+      - name: Test model-routing bridge
+        run: npm run test:shim
       - name: Build CLI
         run: swift build --product homeport
       - name: Check help output

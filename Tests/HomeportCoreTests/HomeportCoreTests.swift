@@ -988,10 +988,16 @@ final class HomeportCoreTests: XCTestCase {
         let service = HomeportService(paths: HomeportPaths(homeDirectory: root))
         let home = try service.createCleanRoom(name: "Routed Home")
 
-        let routing = ModelRoutingConfig(isEnabled: true, providers: ["codex", "ollama"], allowAPIKeyPresets: true)
+        let routing = ModelRoutingConfig(isEnabled: true, providers: ["codex", "copilot", "ollama"], allowAPIKeyPresets: true)
         try service.setModelRouting(id: home.id, routing: routing)
         let saved = try XCTUnwrap(try service.loadState().homes.first(where: { $0.id == home.id }))
         XCTAssertEqual(saved.modelRouting, routing)
+
+        let routingData = try JSONEncoder().encode(try XCTUnwrap(saved.modelRouting))
+        let routingJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: routingData) as? [String: Any])
+        XCTAssertEqual(Set(routingJSON.keys), ["allowAPIKeyPresets", "isEnabled", "providers"])
+        XCTAssertNil(routingJSON["token"])
+        XCTAssertNil(routingJSON["environment"])
 
         try service.setModelRouting(id: home.id, routing: nil)
         let cleared = try XCTUnwrap(try service.loadState().homes.first(where: { $0.id == home.id }))

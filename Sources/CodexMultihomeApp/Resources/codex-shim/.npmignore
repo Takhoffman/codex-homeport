@@ -1,0 +1,3 @@
+.codex-shim/
+__pycache__/
+*.py[cod]

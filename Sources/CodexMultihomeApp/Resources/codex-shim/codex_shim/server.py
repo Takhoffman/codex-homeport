@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import suppress
 import json
 import re
 import secrets
@@ -13,6 +14,17 @@ from urllib.parse import urljoin
 
 from aiohttp import ClientSession, ClientTimeout, web
 
+from .copilot_passthrough import (
+    CodexRequestIdentity,
+    CopilotBridge,
+    CopilotUnavailableError,
+    codex_request_identity,
+    copilot_models,
+    copilot_passthrough_available,
+    copilot_passthrough_display_names,
+    copilot_upstream_model,
+    is_copilot_passthrough_slug,
+)
 from .cursor_passthrough import (
     CURSOR_MODEL_SLUG,
     build_cursor_prompt,
@@ -80,6 +92,7 @@ class ShimServer:
         self.host = host
         self.timeout = ClientTimeout(total=None, sock_connect=120, sock_read=None)
         self.picker_token = secrets.token_urlsafe(32)
+        self.copilot_bridge = CopilotBridge()
 
     def app(self) -> web.Application:
         allowed_hosts = build_allowed_hosts(self.host)
@@ -96,7 +109,11 @@ class ShimServer:
         app.router.add_get("/picker", self.picker_page)
         app.router.add_get("/api/models", self.api_models)
         app.router.add_post("/api/switch", self.switch_model)
+        app.on_cleanup.append(self._cleanup)
         return app
+
+    async def _cleanup(self, _app: web.Application) -> None:
+        await self.copilot_bridge.close()
 
     async def picker_page(self, _request: web.Request) -> web.Response:
         return web.Response(text=_picker_html(self.picker_token), content_type="text/html")
@@ -121,6 +138,16 @@ class ShimServer:
                         "slug": slug,
                         "display_name": display_name,
                         "provider": "chatgpt",
+                        "active": current == slug,
+                    }
+                )
+        if copilot_passthrough_available():
+            for slug, display_name in copilot_passthrough_display_names().items():
+                data.append(
+                    {
+                        "slug": slug,
+                        "display_name": display_name,
+                        "provider": "github-copilot",
                         "active": current == slug,
                     }
                 )
@@ -169,6 +196,9 @@ class ShimServer:
         if chatgpt_passthrough_available():
             valid.update(chatgpt_passthrough_slugs())
             display_for.update(chatgpt_passthrough_display_names())
+        if copilot_passthrough_available():
+            valid.update(copilot_passthrough_display_names())
+            display_for.update(copilot_passthrough_display_names())
         if cursor_passthrough_available():
             valid.update(cursor_passthrough_display_names())
             display_for.update(cursor_passthrough_display_names())
@@ -183,8 +213,11 @@ class ShimServer:
     async def health(self, _request: web.Request) -> web.Response:
         models = usable_byok_models(self.settings.load())
         chatgpt_ok = chatgpt_passthrough_available()
+        copilot_ok = copilot_passthrough_available()
         cursor_ok = cursor_passthrough_available()
         passthrough_count = len(chatgpt_passthrough_slugs()) if chatgpt_ok else 0
+        if copilot_ok:
+            passthrough_count += len(copilot_models())
         if cursor_ok:
             passthrough_count += len(cursor_passthrough_display_names())
         count = len(models) + passthrough_count
@@ -193,6 +226,7 @@ class ShimServer:
                 "ok": True,
                 "models": count,
                 "chatgpt_passthrough": chatgpt_ok,
+                "copilot_passthrough": copilot_ok,
                 "cursor_passthrough": cursor_ok,
                 "auto_router": self._active_router() is not None,
             }
@@ -208,6 +242,16 @@ class ShimServer:
             data.extend(
                 {"id": slug, "object": "model", "created": now, "owned_by": "chatgpt"}
                 for slug in sorted(chatgpt_passthrough_slugs())
+            )
+        if copilot_passthrough_available():
+            data.extend(
+                {
+                    "id": slug,
+                    "object": "model",
+                    "created": now,
+                    "owned_by": "github-copilot",
+                }
+                for slug in sorted(copilot_passthrough_display_names())
             )
         if cursor_passthrough_available():
             data.extend(
@@ -263,6 +307,8 @@ class ShimServer:
                 response_model_override=override,
                 upstream_model=upstream,
             )
+        if is_copilot_passthrough_slug(model):
+            return await self._copilot_passthrough(request, body)
         if is_cursor_passthrough_slug(model):
             return await self._cursor_passthrough(
                 request,
@@ -289,6 +335,22 @@ class ShimServer:
         if is_chatgpt_passthrough_slug(model):
             upstream = chatgpt_upstream_model(model)
             return await self._chatgpt_compact_passthrough(request, body, upstream_model=upstream)
+        if is_copilot_passthrough_slug(model):
+            compact_body = dict(body)
+            compact_body["input"] = body.get("input") or []
+            compact_body["tools"] = []
+            compact_body["instructions"] = (
+                f"{body.get('instructions') or ''}\n\nSummarize the conversation into a compact state handoff "
+                "for another coding-agent turn. Preserve decisions, constraints, modified files, test results, "
+                "and unresolved work."
+            ).strip()
+            response = await self._copilot_passthrough(
+                request,
+                compact_body,
+                force_non_stream=True,
+                isolate_session=True,
+            )
+            return await _as_compact_response(response, model)
         if is_cursor_passthrough_slug(model):
             compact_body = dict(body)
             compact_body["input"] = body.get("input") or []
@@ -505,7 +567,7 @@ class ShimServer:
             "OpenAI-Beta": "responses=2026-02-06",
             "originator": "codex_cli_rs",
             "chatgpt-account-id": account_id,
-            "session_id": request.headers.get("session_id", ""),
+            "session_id": request.headers.get("session-id", ""),
         }
         url = "https://chatgpt.com/backend-api/codex/responses"
         async with ClientSession(timeout=self.timeout) as session:
@@ -571,7 +633,7 @@ class ShimServer:
             "OpenAI-Beta": "responses=2026-02-06",
             "originator": "codex_cli_rs",
             "chatgpt-account-id": account_id,
-            "session_id": request.headers.get("session_id", ""),
+            "session_id": request.headers.get("session-id", ""),
         }
         url = "https://chatgpt.com/backend-api/codex/responses/compact"
         async with ClientSession(timeout=self.timeout) as session:
@@ -581,6 +643,123 @@ class ShimServer:
             payload = await upstream.json(content_type=None)
         _rewrite_response_model(payload, original_model or None)
         return web.json_response(payload)
+
+    async def _copilot_passthrough(
+        self,
+        request: web.Request,
+        body: dict[str, Any],
+        *,
+        force_non_stream: bool = False,
+        isolate_session: bool = False,
+    ) -> web.StreamResponse:
+        """Run an entitled Copilot model while leaving all tools in Codex."""
+        slug = str(body.get("model") or "")
+        # Resolve eagerly so missing/stale catalog entries fail before an SSE
+        # response is prepared.
+        try:
+            copilot_upstream_model(slug)
+        except CopilotUnavailableError as exc:
+            status = 401 if not copilot_models() else 404
+            return web.json_response(
+                {"error": {"type": "copilot_unavailable", "message": str(exc)}},
+                status=status,
+            )
+        identity = codex_request_identity(request.headers, body)
+        if isolate_session:
+            identity = CodexRequestIdentity(
+                session_id=identity.session_id,
+                thread_id=identity.thread_id,
+                turn_id=f"{identity.turn_id or 'unknown-turn'}:compact:{uuid.uuid4().hex}",
+            )
+        stream = bool(body.get("stream")) and not force_non_stream
+
+        if not stream:
+            text_parts: list[str] = []
+            output: list[dict[str, Any]] = []
+            usage: dict[str, Any] | None = None
+            async for event in self.copilot_bridge.events(body, identity):
+                if event.kind == "text_delta":
+                    text_parts.append(event.text)
+                elif event.kind == "tool_call":
+                    output.append(_copilot_tool_output_item(event))
+                elif event.kind == "usage":
+                    usage = event.usage
+                elif event.kind == "error":
+                    status = 401 if "sign" in event.text.lower() or "auth" in event.text.lower() else 502
+                    return web.json_response(
+                        {"error": {"type": "copilot_bridge_error", "message": event.text}},
+                        status=status,
+                    )
+            text = "".join(text_parts)
+            if text:
+                output.insert(
+                    0,
+                    {
+                        "id": f"msg_{uuid.uuid4().hex}",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": text, "annotations": []}],
+                    },
+                )
+            payload: dict[str, Any] = {
+                "id": f"resp_{uuid.uuid4().hex}",
+                "object": "response",
+                "created_at": int(time.time()),
+                "model": slug,
+                "status": "completed",
+                "output": output,
+            }
+            if usage is not None:
+                payload["usage"] = usage
+            return web.json_response(payload)
+
+        response = _sse_response()
+        await response.prepare(request)
+        state = ResponsesStreamState(slug)
+        failed = False
+        try:
+            await state.start(response)
+            async for event in self.copilot_bridge.events(body, identity):
+                if event.kind == "text_delta":
+                    await state.write_chat_delta(
+                        response,
+                        {"choices": [{"delta": {"content": event.text}}]},
+                    )
+                elif event.kind == "tool_call":
+                    await state.write_external_tool_call(
+                        response,
+                        call_id=event.call_id,
+                        name=event.name,
+                        namespace=event.namespace,
+                        arguments=event.arguments,
+                        custom_input=event.input,
+                        output_type=event.output_type,
+                    )
+                elif event.kind == "usage" and event.usage is not None:
+                    state.usage = event.usage
+                elif event.kind == "error":
+                    failed = True
+                    await state.fail(
+                        response,
+                        message=event.text,
+                        code=event.error_code or "copilot_bridge_error",
+                    )
+                    break
+            if not failed:
+                await state.finish(response)
+        except ClientDisconnected:
+            pass
+        except Exception as exc:
+            print(f"[err] Copilot passthrough {slug}: {exc}", flush=True)
+            if not failed:
+                with suppress(Exception):
+                    await state.fail(response, message=str(exc), code="copilot_bridge_error")
+        try:
+            await response.write_eof()
+        except Exception:
+            pass
+        return response
 
     async def _cursor_passthrough(
         self,
@@ -964,6 +1143,23 @@ def _sanitize_chatgpt_passthrough_body(body: dict[str, Any]) -> dict[str, Any]:
     return sanitized if isinstance(sanitized, dict) else {}
 
 
+def _copilot_tool_output_item(event: Any) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "id": event.call_id,
+        "type": event.output_type,
+        "status": "completed",
+        "call_id": event.call_id,
+        "name": event.name,
+    }
+    if event.namespace:
+        item["namespace"] = event.namespace
+    if event.output_type == "custom_tool_call":
+        item["input"] = event.input
+    else:
+        item["arguments"] = event.arguments
+    return item
+
+
 def _sanitize_chatgpt_passthrough_value(value: Any) -> Any:
     if isinstance(value, list):
         output = []
@@ -1262,6 +1458,57 @@ class ResponsesStreamState:
         await _write_sse(response, {"type": "response.completed", "response": self._response("completed", final=True)})
         await response.write(b"data: [DONE]\n\n")
 
+    async def fail(self, response: web.StreamResponse, *, message: str, code: str) -> None:
+        payload = self._response("failed", final=True)
+        payload["error"] = {"type": code, "code": code, "message": message, "param": None}
+        await _write_sse(response, {"type": "response.failed", "response": payload})
+        await response.write(b"data: [DONE]\n\n")
+
+    async def write_external_tool_call(
+        self,
+        response: web.StreamResponse,
+        *,
+        call_id: str,
+        name: str,
+        namespace: str,
+        arguments: str,
+        custom_input: str,
+        output_type: str,
+    ) -> None:
+        key = ("external", call_id)
+        state = await self._open_tool(
+            response,
+            key=key,
+            call_id=call_id,
+            name=name,
+            output_type_override=output_type,
+            namespace_override=namespace,
+        )
+        if output_type == "custom_tool_call":
+            state["input"] = custom_input
+            if custom_input:
+                await _write_sse(
+                    response,
+                    {
+                        "type": "response.custom_tool_call_input.delta",
+                        "item_id": state["id"],
+                        "output_index": state["output_index"],
+                        "delta": custom_input,
+                    },
+                )
+        else:
+            state["arguments"] = arguments
+            if arguments:
+                await _write_sse(
+                    response,
+                    {
+                        "type": "response.function_call_arguments.delta",
+                        "item_id": state["id"],
+                        "output_index": state["output_index"],
+                        "delta": arguments,
+                    },
+                )
+
     # ------------------------------------------------------------------
     # Chat-completions (OpenAI-style) deltas
     # ------------------------------------------------------------------
@@ -1311,16 +1558,7 @@ class ResponsesStreamState:
                 state["name"] += fn["name"]
         arg_delta = fn.get("arguments") or ""
         if arg_delta:
-            state["arguments"] += arg_delta
-            await _write_sse(
-                response,
-                {
-                    "type": "response.function_call_arguments.delta",
-                    "item_id": state["id"],
-                    "output_index": state["output_index"],
-                    "delta": arg_delta,
-                },
-            )
+            await self._tool_arguments_delta(response, state, arg_delta)
 
     # ------------------------------------------------------------------
     # Anthropic deltas
@@ -1367,16 +1605,7 @@ class ResponsesStreamState:
                 if state is not None:
                     arg_delta = delta.get("partial_json") or ""
                     if arg_delta:
-                        state["arguments"] += arg_delta
-                        await _write_sse(
-                            response,
-                            {
-                                "type": "response.function_call_arguments.delta",
-                                "item_id": state["id"],
-                                "output_index": state["output_index"],
-                                "delta": arg_delta,
-                            },
-                        )
+                        await self._tool_arguments_delta(response, state, arg_delta)
             elif dtype == "thinking_delta":
                 state = self.reasoning_blocks.get(("anthropic_thinking", idx))
                 if state is None:
@@ -1506,7 +1735,16 @@ class ResponsesStreamState:
             },
         )
 
-    async def _open_tool(self, response: web.StreamResponse, *, key: Any, call_id: str, name: str) -> dict[str, Any]:
+    async def _open_tool(
+        self,
+        response: web.StreamResponse,
+        *,
+        key: Any,
+        call_id: str,
+        name: str,
+        output_type_override: str | None = None,
+        namespace_override: str | None = None,
+    ) -> dict[str, Any]:
         # Close the assistant message before opening tool items, matching the
         # OpenAI Responses-API ordering Codex expects.
         if self.message_opened and not self.message_closed:
@@ -1519,16 +1757,21 @@ class ResponsesStreamState:
         tool_info = _tool_info(self.tool_types.get(name, ""))
         original_type = tool_info.get("type", "")
         output_type = "function_call"
-        if original_type == "apply_patch":
+        if original_type in {"apply_patch", "custom"}:
             output_type = "custom_tool_call"
         elif original_type.startswith("web_search"):
             output_type = "web_search_call"
+        if output_type_override is not None:
+            output_type = output_type_override
+        resolved_name = name if output_type_override is not None else (tool_info.get("name") or name)
+        resolved_namespace = namespace_override if namespace_override is not None else tool_info.get("namespace", "")
         state: dict[str, Any] = {
             "id": call_id,
             "call_id": call_id,
-            "name": tool_info.get("name") or name,
-            "namespace": tool_info.get("namespace", ""),
+            "name": resolved_name,
+            "namespace": resolved_namespace,
             "arguments": "",
+            "input": "",
             "output_index": output_index,
             "closed": False,
             "output_type": output_type,
@@ -1544,16 +1787,67 @@ class ResponsesStreamState:
                     "type": output_type,
                     "status": "in_progress",
                     "call_id": call_id,
-                    "name": tool_info.get("name") or name,
-                    "arguments": "",
-                    **({"namespace": tool_info["namespace"]} if tool_info.get("namespace") else {}),
+                    "name": resolved_name,
+                    **({"input": ""} if output_type == "custom_tool_call" else {"arguments": ""}),
+                    **({"namespace": resolved_namespace} if resolved_namespace else {}),
                 },
             },
         )
         return state
 
+    async def _tool_arguments_delta(
+        self,
+        response: web.StreamResponse,
+        state: dict[str, Any],
+        delta: str,
+    ) -> None:
+        state["arguments"] += delta
+        # Custom tool arguments arrive from chat-style providers as a JSON
+        # wrapper. Buffer that wrapper and emit the actual free-form `input`
+        # in _close_tool; a function-arguments event for a custom item is not a
+        # valid Responses stream event.
+        if state.get("output_type") == "custom_tool_call":
+            return
+        await _write_sse(
+            response,
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": state["id"],
+                "output_index": state["output_index"],
+                "delta": delta,
+            },
+        )
+
     async def _close_tool(self, response: web.StreamResponse, state: dict[str, Any]) -> None:
         state["closed"] = True
+        if state.get("output_type") == "custom_tool_call":
+            if not state.get("input") and state.get("arguments"):
+                raw = state["arguments"]
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError:
+                    parsed = raw
+                if isinstance(parsed, dict):
+                    parsed = parsed.get("input", parsed.get("patch", raw))
+                state["input"] = str(parsed or "")
+            await _write_sse(
+                response,
+                {
+                    "type": "response.custom_tool_call_input.done",
+                    "item_id": state["id"],
+                    "output_index": state["output_index"],
+                    "input": state.get("input", ""),
+                },
+            )
+            await _write_sse(
+                response,
+                {
+                    "type": "response.output_item.done",
+                    "output_index": state["output_index"],
+                    "item": self._tool_item(state, "completed"),
+                },
+            )
+            return
         await _write_sse(
             response,
             {
@@ -1685,15 +1979,19 @@ class ResponsesStreamState:
         }
 
     def _tool_item(self, state: dict[str, Any], status: str) -> dict[str, Any]:
-        return {
+        item = {
             "id": state["id"],
             "type": state.get("output_type", "function_call"),
             "status": status,
             "call_id": state["call_id"],
             "name": state["name"],
-            "arguments": state["arguments"],
             **({"namespace": state["namespace"]} if state.get("namespace") else {}),
         }
+        if state.get("output_type") == "custom_tool_call":
+            item["input"] = state.get("input", "")
+        else:
+            item["arguments"] = state["arguments"]
+        return item
 
     def _response(self, status: str, *, final: bool = False) -> dict[str, Any]:
         output: list[dict[str, Any]] = []

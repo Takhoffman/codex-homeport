@@ -8,3 +8,7 @@ Sources/CodexMultihomeApp/Resources/mitmproxy-runtime/x86_64/
 *.xcodeproj
 *.xcworkspace
 .DS_Store
+__pycache__/
+*.py[cod]
+Sources/CodexMultihomeApp/Resources/codex-shim/.codex-shim/*
+!Sources/CodexMultihomeApp/Resources/codex-shim/.codex-shim/.gitkeep

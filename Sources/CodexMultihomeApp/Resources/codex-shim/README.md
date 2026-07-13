@@ -1,8 +1,9 @@
 # codex-shim
 
 Run **Codex Desktop** against any BYOK model you can describe in
-`~/.codex-shim/models.json`, plus an optional passthrough to your **ChatGPT
-subscription's Codex model** — without rebuilding Codex.
+`~/.codex-shim/models.json`, plus optional passthroughs to your **ChatGPT
+subscription's Codex model** and the models available to your **GitHub Copilot
+subscription** — without rebuilding Codex.
 
 The shim is a local Python/aiohttp server that exposes an OpenAI
 Responses-compatible endpoint on loopback. Codex points at the shim; the shim
@@ -35,6 +36,11 @@ local:
 - **ChatGPT/Codex passthrough.** If `~/.codex/auth.json` has a valid Codex
   access token, the shim can route Codex's native `/v1/responses` traffic to
   ChatGPT's Codex backend under the `gpt-5.5` slug used by current Codex builds.
+- **GitHub Copilot subscription passthrough.** If `copilot login` is active,
+  the shim discovers the models GitHub says your account can use and exposes
+  them as `copilot-*` picker entries. The Copilot model can request tools, but
+  Codex still owns their execution, sandboxing, and approvals. The shim does
+  not copy or store your Copilot token.
 - **Cursor/Composer passthrough.** If `cursor-agent login` is active, the shim
   exposes `composer-2-5` and routes through your Cursor subscription — no
   Dashboard API key (`crsr_…`) required. See
@@ -64,7 +70,9 @@ local:
   - `~/.codex-shim/models.json` with configured BYOK/upstream models;
   - a compatible JSON file passed with `--settings`;
   - `~/.codex/auth.json` containing `tokens.access_token` for ChatGPT/Codex
-    passthrough-only use.
+    passthrough-only use;
+  - the GitHub Copilot CLI on `PATH` and authenticated with `copilot login` for
+    Copilot passthrough-only use.
 - Windows: PowerShell/cmd works when installed via the Python package entry
   point; WSL or Git Bash is needed only for the optional `bin/` shell wrappers.
 - macOS only: `npx` and `codesign` if you need the optional Desktop picker
@@ -253,8 +261,9 @@ codex-shim disable
 ```
 
 After this, Codex Desktop sees every entry from `~/.codex-shim/models.json`,
-plus the `GPT-5.5` ChatGPT passthrough slug if (and only if) `~/.codex/auth.json`
-holds a valid `tokens.access_token`.
+plus the `GPT-5.5` ChatGPT passthrough slug if `~/.codex/auth.json` holds a valid
+`tokens.access_token` and the dynamically discovered `copilot-*` entries if the
+Copilot CLI is installed and signed in.
 
 If your Codex Desktop's model picker only shows `default` and refuses to render
 the catalog entries, apply the macOS picker patch below.
@@ -609,6 +618,83 @@ that prefix as an alias and routes it to the same passthrough.
 
 ---
 
+## GitHub Copilot passthrough (subscription)
+
+The Copilot route uses the official GitHub Copilot SDK and your installed
+`copilot` CLI. It authenticates through the CLI's existing subscription login;
+it does not require you to copy a GitHub token into the shim or configure a
+separately billed model API key.
+
+Prerequisites:
+
+- a GitHub Copilot plan that includes Copilot CLI access;
+- the `copilot` executable available on `PATH` (verify with `copilot --version`);
+- an active CLI login created with `copilot login`.
+
+For the Multihome app, open the home's **Model Routing** panel, enable **Route
+models through shim** and **GitHub Copilot**, and use the provider row's
+**Login** button if needed. Choose **Restart** after login so the shim refreshes
+the model catalog, then open **Model Picker** and select a `copilot-*` entry.
+
+The equivalent CLI flow is:
+
+```bash
+copilot --version
+copilot login
+codex-shim generate
+codex-shim doctor
+codex-shim list
+codex-shim model use copilot-<slug-from-list>
+codex-app
+```
+
+The model list is intentionally not hard-coded. During catalog generation the
+shim asks Copilot for the models currently entitled to the signed-in account,
+namespaces their local slugs with `copilot-`, and caches the last successful
+non-secret model metadata in `~/.codex-shim/copilot-models.json`. Signing out or
+losing access prevents a fresh authenticated discovery. Run `copilot login`,
+then regenerate or restart the shim to refresh the list.
+
+### Tool ownership and credentials
+
+Copilot receives tool declarations, not permission to run Codex tools itself.
+When it requests a function or custom tool, the shim emits the corresponding
+Responses tool call. The Codex harness applies its normal approval and sandbox
+policy, executes the tool, and sends the result back through the same Copilot
+turn. The bridge does not delegate arbitrary shell or file access to the
+Copilot CLI.
+
+The shim does not read, copy, print, or persist Copilot credentials. It starts
+the CLI with its normal login store and deliberately ignores token override
+environment variables for this subscription route. The only shim-owned
+Copilot state is the non-secret model metadata cache described above. Each
+temporary SDK conversation is permanently deleted after its Codex turn ends;
+Codex remains the owner of durable conversation history.
+
+### Usage and current limitations
+
+- Requests count against the signed-in GitHub Copilot plan. GitHub controls
+  model eligibility, quotas, rate limits, and whether a model consumes premium
+  requests (including any model-specific multiplier). The shim does not bypass
+  or convert those limits into API entitlement.
+- This integration covers GitHub Copilot authentication and accounting only.
+  It does not connect a separate Claude.ai or xAI/Grok subscription. If GitHub
+  offers a third-party model through Copilot, using it still goes through the
+  Copilot plan.
+- The Copilot route is currently text-only. Image and screenshot inputs are not
+  forwarded to the Copilot SDK.
+- Codex function and custom tool round-trips are supported. Hosted `tool_search`,
+  web/file search, image generation, and code-interpreter tools are not exposed
+  through this route yet.
+- The [official GitHub Copilot SDK](https://github.com/github/copilot-sdk) is in
+  public preview. Deferred tool continuation currently depends on its
+  pending-tool RPC, so SDK or CLI protocol changes may require a shim update.
+
+Set `CODEX_SHIM_DISABLE_COPILOT=1` before generating or starting the shim to
+disable this route explicitly.
+
+---
+
 ## Cursor/Composer passthrough (subscription)
 
 If `cursor-agent status` shows you are logged in, the shim exposes
@@ -642,6 +728,10 @@ Codex Desktop ── /v1/responses ──▶ codex-shim (127.0.0.1:8765)
                                      ├── slug "gpt-5.5"
                                      │       └─▶ chatgpt.com/backend-api/codex/responses
                                      │           (Authorization: Bearer <auth.json access_token>)
+                                     │
+                                     ├── slug "copilot-*"
+                                     │       └─▶ official Copilot SDK ─▶ installed Copilot CLI
+                                     │           (uses CLI login; tools execute in Codex)
                                      │
                                      ├── provider "openai" / "generic-…"
                                      │       └─▶ baseUrl/chat/completions
@@ -762,6 +852,7 @@ Codex can compact long sessions through `POST /v1/responses/compact`.
 | route | behavior |
 |---|---|
 | ChatGPT passthrough (`gpt-5.5` / `openai-gpt-5-5*`) | Forwards to ChatGPT's native `/backend-api/codex/responses/compact` endpoint and rewrites returned model metadata back to the requested shim slug. |
+| GitHub Copilot passthrough (`copilot-*`) | Requests a text-only handoff summary from the selected entitled Copilot model, then returns a Responses-shaped compacted window. |
 | BYOK OpenAI/chat-completions providers | Sends a non-streaming summarization request through `/chat/completions`, then returns a Responses-shaped compacted window whose `output` can be used as the next `input`. |
 | BYOK Anthropic providers | Sends a non-streaming compact request through `/messages`, then returns the same Responses-shaped compacted window. |
 
@@ -996,6 +1087,8 @@ server is reachable.
 - Request logs are summary-level by default and avoid full prompt/API-key dumps.
 - ChatGPT passthrough reads `~/.codex/auth.json` at request time and forwards
   the access token only to ChatGPT's Codex endpoint.
+- GitHub Copilot passthrough delegates authentication to the installed CLI. It
+  persists no Copilot token and caches only non-secret entitled-model metadata.
 - If you put a prompt-catching proxy in front of the shim, that proxy controls
   what it logs. Redact or hash large/private prompt bodies there.
 
@@ -1007,6 +1100,10 @@ server is reachable.
   sensitive by nature.
 - The ChatGPT passthrough endpoint is the endpoint current Codex builds use; it
   may move or change shape in a future Codex release.
+- The GitHub Copilot SDK is a public-preview dependency, and the deferred-tool
+  continuation RPC may change. The current Copilot route supports text plus
+  Codex-owned function/custom tools, not image inputs or hosted search/tool
+  execution.
 - BYOK providers vary wildly in tool-call quality. The shim translates shapes;
   it cannot make an upstream model reliably emit valid tool-call JSON.
 - Hosted Responses-only tools are highest fidelity on the ChatGPT passthrough
@@ -1029,9 +1126,10 @@ tail -n 80 .codex-shim/shim.log
 `codex-shim doctor` prints a read-only diagnostics report grouped by section
 (Python, dependencies, Codex CLI, settings, runtime files, daemon health,
 passthrough availability, proxy bypass, and Codex config). It never writes
-configuration, starts/stops the daemon, calls model providers, or prints API
-keys/tokens. It exits 1 only when a hard `FAIL` is detected; warnings are meant
-as local setup hints.
+configuration, starts/stops the daemon, sends an inference prompt, or prints API
+keys/tokens. Its Copilot check may perform read-only entitled-model discovery.
+It exits 1 only when a hard `FAIL` is detected; warnings are meant as local
+setup hints.
 
 Common causes:
 
@@ -1046,11 +1144,11 @@ codex-shim --port 8766 app .
 
 ### `~/.codex-shim/models.json` is missing
 
-That is fine for ChatGPT passthrough-only use, **provided** `~/.codex/auth.json`
-has a valid `tokens.access_token`. In that case `codex-shim generate` writes a
-catalog containing just `gpt-5.5`. If neither file is present, the catalog will
-be empty and `codex-shim list` will exit non-zero with a hint to run
-`codex login` or pass a compatible settings file:
+That is fine for subscription-passthrough-only use. With a valid
+`~/.codex/auth.json` token, `codex-shim generate` adds `gpt-5.5`; with an active
+`copilot login`, it adds the entitled `copilot-*` models. If neither login is
+available, the catalog will be empty and `codex-shim list` will exit non-zero
+with a setup hint:
 
 ```bash
 codex-shim --settings /path/to/my-models.json generate
@@ -1058,14 +1156,34 @@ codex-shim --settings /path/to/my-models.json generate
 
 ### `codex-shim list` exits 1 with "No models available"
 
-You have neither configured models in `~/.codex-shim/models.json` nor a valid
-Codex login. Pick one:
+You have neither configured models in `~/.codex-shim/models.json` nor an
+available subscription passthrough. Pick one:
 
 ```bash
 codex login                       # populate ~/.codex/auth.json
 # or
+copilot login                     # use models entitled by GitHub Copilot
+# or
 codex-shim --settings /path/to/my-models.json list
 ```
+
+### Copilot models do not appear
+
+Verify the CLI and login, then force a catalog refresh:
+
+```bash
+copilot --version
+copilot login
+codex-shim doctor
+codex-shim generate
+codex-shim list
+```
+
+In Multihome, also make sure **GitHub Copilot** is enabled in the home's
+**Model Routing** panel, then choose **Restart**. Remove
+`CODEX_SHIM_DISABLE_COPILOT` from the shim environment if you set it manually.
+The provider status can confirm the CLI is installed without spending a model
+request; sign-in is confirmed when entitled models load.
 
 ### Codex shows only `default`
 

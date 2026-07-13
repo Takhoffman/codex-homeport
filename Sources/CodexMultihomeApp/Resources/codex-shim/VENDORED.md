@@ -9,5 +9,11 @@ The upstream MIT license is included in [LICENSE](LICENSE). Release packaging
 prepares checksum-verified standalone CPython runtimes for Apple Silicon and
 Intel Macs, with the exact versions listed in `requirements.txt`. Published
 packages and installed apps therefore need no globally installed Python or
-`codex-shim` executable, and routing runs offline. A source checkout prepares
+`codex-shim` executable. The bundled server starts without dependency downloads;
+remote model requests still require network access. A source checkout prepares
 only its host runtime through `scripts/prepare-shim-runtime.sh`.
+
+The optional GitHub Copilot subscription bridge bundles the official
+`github-copilot-sdk` Python package. Its MIT notice is included in
+[COPILOT-SDK-LICENSE](COPILOT-SDK-LICENSE); the separately installed Copilot CLI
+is located at runtime and is not copied into the app bundle.

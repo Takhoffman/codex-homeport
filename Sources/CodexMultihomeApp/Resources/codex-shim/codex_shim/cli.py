@@ -35,6 +35,15 @@ from .cursor_passthrough import (
     cursor_passthrough_display_names,
     is_cursor_passthrough_slug,
 )
+from .copilot_passthrough import (
+    copilot_cli_path,
+    copilot_model_status_detail,
+    copilot_models,
+    copilot_passthrough_available,
+    copilot_passthrough_display_names,
+    copilot_sdk_available,
+    is_copilot_passthrough_slug,
+)
 from .settings import (
     CHATGPT_MODEL_SLUG,
     DEFAULT_SETTINGS,
@@ -295,6 +304,7 @@ def doctor(settings_path: Path, port: int) -> int:
     checks.extend(_doctor_runtime_files())
     checks.extend(_doctor_daemon(port))
     checks.extend(_doctor_chatgpt())
+    checks.extend(_doctor_copilot())
     checks.extend(_doctor_cursor())
     checks.extend(_doctor_proxy_env())
     checks.extend(_doctor_codex_config())
@@ -357,7 +367,10 @@ def _doctor_settings(settings_path: Path) -> list[DoctorCheck]:
     section = "Settings"
     path = settings_path.expanduser()
     if not path.exists():
-        detail = "Create ~/.codex-shim/models.json or run codex login for ChatGPT passthrough-only use."
+        detail = (
+            "Create ~/.codex-shim/models.json, run `codex login` for ChatGPT passthrough, "
+            "or run `copilot login` for GitHub Copilot passthrough."
+        )
         return [DoctorCheck(section, "WARN", f"settings file not found: {path}", detail)]
     checks = [DoctorCheck(section, "OK", f"path: {path}")]
     try:
@@ -452,7 +465,7 @@ def _doctor_daemon(port: int) -> list[DoctorCheck]:
         checks.append(DoctorCheck("Shim daemon", "OK", f"health ok: {model_count} models"))
     else:
         checks.append(DoctorCheck("Shim daemon", "WARN", f"health not ok: {model_count} models"))
-    for key in ("chatgpt_passthrough", "cursor_passthrough", "auto_router"):
+    for key in ("chatgpt_passthrough", "copilot_passthrough", "cursor_passthrough", "auto_router"):
         if key in health:
             checks.append(DoctorCheck("Shim daemon", "INFO", f"{key}: {_bool_text(health.get(key))}"))
     return checks
@@ -502,6 +515,29 @@ def _doctor_cursor() -> list[DoctorCheck]:
                 "Run `cursor-agent login` if you want Cursor passthrough.",
             )
         )
+    return checks
+
+
+def _doctor_copilot() -> list[DoctorCheck]:
+    if _env_flag("CODEX_SHIM_DISABLE_COPILOT"):
+        return [DoctorCheck("GitHub Copilot", "INFO", "disabled via CODEX_SHIM_DISABLE_COPILOT")]
+    checks: list[DoctorCheck] = []
+    executable = copilot_cli_path()
+    if executable:
+        checks.append(DoctorCheck("GitHub Copilot", "OK", f"CLI: {executable}"))
+    else:
+        checks.append(DoctorCheck("GitHub Copilot", "WARN", "Copilot CLI not found", "Install it, then run `copilot login`."))
+    if copilot_sdk_available():
+        checks.append(DoctorCheck("GitHub Copilot", "OK", "official Python SDK importable"))
+    else:
+        checks.append(DoctorCheck("GitHub Copilot", "WARN", "official Python SDK missing from this runtime"))
+    records = copilot_models()
+    if records:
+        checks.append(DoctorCheck("GitHub Copilot", "OK", f"subscriber models discovered: {len(records)}"))
+        for record in records:
+            checks.append(DoctorCheck("GitHub Copilot", "INFO", f"exposed model: {record['slug']}"))
+    else:
+        checks.append(DoctorCheck("GitHub Copilot", "WARN", "subscriber models unavailable", copilot_model_status_detail()))
     return checks
 
 
@@ -684,6 +720,10 @@ def list_models(settings_path: Path) -> int:
     if chatgpt_passthrough_available():
         for slug, display_name in chatgpt_passthrough_display_names().items():
             rows.append((slug, display_name, slug, "chatgpt"))
+    if copilot_passthrough_available():
+        upstream_for = {str(record["slug"]): str(record["id"]) for record in copilot_models()}
+        for slug, display_name in copilot_passthrough_display_names().items():
+            rows.append((slug, display_name, upstream_for.get(slug, slug), "github-copilot-subscription"))
     if cursor_passthrough_available():
         for slug, display_name in cursor_passthrough_display_names().items():
             rows.append((slug, display_name, "composer-2.5", "cursor-subscription"))
@@ -694,7 +734,7 @@ def list_models(settings_path: Path) -> int:
     if not rows:
         print(
             "No models available. Create ~/.codex-shim/models.json, pass --settings /path/to/models.json, "
-            "run `codex login` for GPT passthrough, or run `cursor-agent login` for Composer passthrough.",
+            "run `codex login` for GPT passthrough, `copilot login` for Copilot, or `cursor-agent login` for Composer.",
             file=sys.stderr,
         )
         return 1
@@ -1257,6 +1297,10 @@ def _provider_display_name(models, slug: str, router_config=None) -> str:
         display_name = chatgpt_passthrough_display_names().get(slug)
         if display_name:
             return display_name
+    if copilot_passthrough_available():
+        display_name = copilot_passthrough_display_names().get(slug)
+        if display_name:
+            return display_name
     if cursor_passthrough_available():
         display_name = cursor_passthrough_display_names().get(slug)
         if display_name:
@@ -1444,6 +1488,13 @@ def _resolve_model_slug(models, requested: str | None, router_config=None) -> st
         if requested.startswith("openai-gpt-"):
             return CHATGPT_MODEL_SLUG
         return requested
+    if is_copilot_passthrough_slug(requested):
+        if not copilot_passthrough_available():
+            raise SystemExit(
+                "GitHub Copilot passthrough requires the Copilot CLI and subscription login. "
+                "Run `copilot login`, then restart codex-shim."
+            )
+        return requested
     if is_cursor_passthrough_slug(requested):
         if not cursor_passthrough_available():
             raise SystemExit(
@@ -1502,6 +1553,8 @@ def _valid_model_slugs(models, router_config=None) -> set[str]:
         slugs.add(router_config.slug)
     if chatgpt_passthrough_available():
         slugs.update(chatgpt_passthrough_slugs())
+    if copilot_passthrough_available():
+        slugs.update(copilot_passthrough_display_names())
     if cursor_passthrough_available():
         slugs.update(cursor_passthrough_display_names())
     return slugs

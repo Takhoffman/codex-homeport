@@ -16,6 +16,7 @@ from .settings import (
     usable_byok_models,
 )
 from .cursor_passthrough import cursor_catalog_entry, cursor_passthrough_available
+from .copilot_passthrough import copilot_catalog_entries, copilot_passthrough_available
 
 
 PLAN_TIERS = ["free", "plus", "pro", "team", "business", "enterprise"]
@@ -116,6 +117,8 @@ def catalog_entries(models: list[ShimModel], router_config=None, default_slug: s
         entries.append(entry)
     if chatgpt_passthrough_available():
         entries.extend(chatgpt_passthrough_entries(default_slug=default_slug))
+    if copilot_passthrough_available():
+        entries.extend(copilot_catalog_entries(default_slug=default_slug))
     if cursor_passthrough_available():
         entry = cursor_catalog_entry()
         _add_desktop_model_fields(entry)

@@ -256,6 +256,8 @@ class ModelSettings:
                 api_key = os.environ.get(api_key_env, api_key).strip()
             else:
                 api_key = _resolve_api_key(api_key)
+                if not api_key and _uses_cursor_api_credentials(provider, base_url):
+                    api_key = _resolve_cursor_api_key()
             models.append(
                 ShimModel(
                     slug=slug,
@@ -358,7 +360,24 @@ def _resolve_api_key(value: str) -> str:
     raw = value.strip()
     if raw.startswith("${") and raw.endswith("}"):
         raw = os.environ.get(raw[2:-1].strip(), "")
-    if not raw and DEFAULT_CURSOR_API_KEY_FILE.exists():
+    return raw
+
+
+def _uses_cursor_api_credentials(provider: str, base_url: str) -> bool:
+    provider_name = provider.strip().lower()
+    host = ""
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(base_url).hostname or "").lower()
+    except ValueError:
+        pass
+    return "cursor" in provider_name or host == "cursor.com" or host.endswith(".cursor.com") or host.endswith(".cursor.sh")
+
+
+def _resolve_cursor_api_key() -> str:
+    raw = ""
+    if DEFAULT_CURSOR_API_KEY_FILE.exists():
         try:
             raw = DEFAULT_CURSOR_API_KEY_FILE.read_text().strip()
         except OSError:
@@ -400,12 +419,17 @@ def _reasoning_levels(value: Any) -> tuple[str, ...]:
 
 
 def default_model_slug(models: list[ShimModel], include_chatgpt: bool | None = None) -> str:
+    from .copilot_passthrough import copilot_models, copilot_passthrough_available
     from .cursor_passthrough import CURSOR_MODEL_SLUG, cursor_passthrough_available
 
     if include_chatgpt is None:
         include_chatgpt = chatgpt_passthrough_available()
     if include_chatgpt:
         return CHATGPT_MODEL_SLUG
+    if copilot_passthrough_available():
+        records = copilot_models()
+        if records:
+            return str(records[0]["slug"])
     usable = usable_byok_models(models)
     if usable:
         return usable[0].slug
@@ -413,7 +437,7 @@ def default_model_slug(models: list[ShimModel], include_chatgpt: bool | None = N
         return CURSOR_MODEL_SLUG
     raise ValueError(
         "No usable codex-shim models: add models to ~/.codex-shim/models.json, run `codex login`, "
-        "run `cursor-agent login`, or unset CODEX_SHIM_DISABLE_CHATGPT / CODEX_SHIM_DISABLE_CURSOR."
+        "run `copilot login`, run `cursor-agent login`, or enable one of those passthrough providers."
     )
 
 
@@ -423,13 +447,16 @@ def usable_byok_models(models: list[ShimModel]) -> list[ShimModel]:
 
 def available_model_slugs(models: list[ShimModel]) -> set[str]:
     """Every model slug the shim can route to right now: usable BYOK models plus
-    any available ChatGPT/Cursor passthrough slugs. Used by the Auto Router to
+    any available subscription passthrough slugs. Used by the Auto Router to
     keep routing to candidates that actually exist."""
+    from .copilot_passthrough import copilot_passthrough_available, copilot_passthrough_display_names
     from .cursor_passthrough import cursor_passthrough_available, cursor_passthrough_display_names
 
     slugs = {model.slug for model in usable_byok_models(models)}
     if chatgpt_passthrough_available():
         slugs |= chatgpt_passthrough_slugs()
+    if copilot_passthrough_available():
+        slugs |= set(copilot_passthrough_display_names())
     if cursor_passthrough_available():
         slugs |= set(cursor_passthrough_display_names())
     return slugs
