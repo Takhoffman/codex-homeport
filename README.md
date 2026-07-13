@@ -131,10 +131,13 @@ external runtime.
 
 The shim can run the models included with your GitHub Copilot subscription
 inside the Codex Desktop or CLI harness. Install the GitHub Copilot CLI, run
-`copilot login`, then open a home's **Model Routing** panel:
+`copilot login`, then open a home's **Model Routing** panel. Model routing is
+only available for clones, clean rooms, and temporary homes — the Main home
+always launches the untouched default Codex install:
 
 1. Enable **Route models through shim** and **GitHub Copilot**.
-2. Use the Copilot **Login** button if you have not already signed in.
+2. Choose **Sign in** to open `copilot login` in your configured Terminal if
+   you have not already authenticated.
 3. Choose **Restart**, then open **Model Picker** and select one of the
    dynamically discovered `copilot-*` models.
 

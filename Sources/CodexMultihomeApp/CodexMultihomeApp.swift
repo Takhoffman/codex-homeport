@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import SwiftUI
 import HomeportCore
 
@@ -10,12 +11,13 @@ private let cachedBundledShimExecutablePath: String? = Bundle.module.resourceURL
 @main
 struct CodexMultihomeApp: App {
     @StateObject private var model = HomeportModel()
+    @AppStorage("menuPanelHeight") private var menuPanelHeight = MenuPanelSizing.defaultHeight
 
     var body: some Scene {
         MenuBarExtra {
-            HomeportMenuView()
+            HomeportMenuView(panelHeight: $menuPanelHeight)
                 .environmentObject(model)
-                .frame(width: 390)
+                .frame(width: 390, height: CGFloat(menuPanelHeight))
         } label: {
             MenuBarBadgeIcon(title: model.channel.appName, symbol: model.menuIcon, isDev: model.channel == .dev, showsBadge: model.updateAvailable)
         }
@@ -35,6 +37,19 @@ struct CodexMultihomeApp: App {
                 .keyboardShortcut("q")
             }
         }
+    }
+}
+
+private enum MenuPanelSizing {
+    static let minimumHeight = 420.0
+    static let defaultHeight = 620.0
+
+    static var maximumHeight: Double {
+        max(minimumHeight, Double(NSScreen.main?.visibleFrame.height ?? 900) - 72)
+    }
+
+    static func clamped(_ height: Double) -> Double {
+        min(max(height, minimumHeight), maximumHeight)
     }
 }
 
@@ -987,7 +1002,9 @@ final class HomeportModel: ObservableObject {
     }
 
     func routingEnabled(for home: CodexHome) -> Bool {
-        modelRouting(for: home)?.isEnabled == true
+        // The main home is the untouched default install: never wire the shim
+        // into ~/.codex, even if stale state has routing enabled for it.
+        home.kind != .main && modelRouting(for: home)?.isEnabled == true
     }
 
     func routingProviders(for home: CodexHome) -> Set<ShimLoginProvider> {
@@ -998,6 +1015,10 @@ final class HomeportModel: ObservableObject {
     }
 
     func setRoutingEnabled(_ enabled: Bool, for home: CodexHome) {
+        if enabled, home.kind == .main {
+            status = "Model routing is unavailable for the Main home so the default install stays untouched."
+            return
+        }
         var routing = modelRouting(for: home) ?? ModelRoutingConfig(
             providers: ShimLoginProvider.defaultEnabledSet.map(\.rawValue)
         )
@@ -1182,14 +1203,14 @@ final class HomeportModel: ObservableObject {
         let command = provider.shellCommand(home: home)
         let script = Launcher().terminalAppleScript(command: command, terminal: state.preferredTerminal)
         let environment = ProcessInfo.processInfo.environment
-        shimStatus = "Opening \(provider.title) login"
+        shimStatus = "Opening \(provider.title) sign-in in \(state.preferredTerminal.displayName)"
         Task {
             let result = await Task.detached {
                 runCommand(executable: "/usr/bin/osascript", arguments: ["-e", script], environment: environment)
             }.value
             if result.succeeded {
-                shimStatus = "Opened \(provider.title) login"
-                status = "Opened \(provider.title) login"
+                shimStatus = "Opened \(provider.title) sign-in in \(state.preferredTerminal.displayName)"
+                status = shimStatus
                 refreshShimProviderStatuses(home: home)
             } else {
                 shimStatus = result.summary(successMessage: "")
@@ -1831,12 +1852,12 @@ func runShimStartWireSequence(executable: String, baseArguments: [String], defau
     guard enable.succeeded else {
         return CommandResult(exitCode: enable.exitCode, output: [restart.combinedOutput, enable.combinedOutput].joined(separator: "\n"))
     }
-    let trimmedSlug = defaultModelSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    guard !trimmedSlug.isEmpty else {
-        return CommandResult(exitCode: enable.exitCode, output: [restart.combinedOutput, enable.combinedOutput].joined(separator: "\n"))
-    }
-    let select = runCommand(executable: executable, arguments: baseArguments + ["model", "use", trimmedSlug], environment: environment)
-    return CommandResult(exitCode: select.exitCode, output: [restart.combinedOutput, enable.combinedOutput, select.combinedOutput].joined(separator: "\n"))
+    // `enable` keeps the currently managed model when it is still in the new
+    // catalog, and falls back to the catalog default otherwise. Do not issue a
+    // second `model use` here: doing so used to erase the user's picker choice
+    // on every App/Term launch.
+    _ = defaultModelSlug
+    return CommandResult(exitCode: enable.exitCode, output: [restart.combinedOutput, enable.combinedOutput].joined(separator: "\n"))
 }
 
 func expandUserPath(_ path: String) -> String {
@@ -2130,6 +2151,7 @@ enum NewHomeMode: String, CaseIterable, Identifiable, Sendable {
 struct HomeportMenuView: View {
     @EnvironmentObject var model: HomeportModel
     @Environment(\.openWindow) private var openWindow
+    @Binding var panelHeight: Double
     @State private var selectedTab: MenuTab = .favorites
     @State private var isEditingList = false
     @State private var focusedHome: CodexHome?
@@ -2210,10 +2232,7 @@ struct HomeportMenuView: View {
                                 moveFoldersOnRename: $moveFoldersOnRename,
                                 moveHomePathOnEdit: $moveHomePathOnEdit,
                                 launch: { target in model.launch(focusedHome.slug, target: target) },
-                                setPinned: { pinned in
-                                    model.setHomePinned(focusedHome, pinned: pinned)
-                                    self.focusedHome = model.state.homes.first { $0.id == focusedHome.id } ?? focusedHome
-                                },
+                                setPinned: { setFocusedHomePinned(focusedHome, pinned: $0) },
                                 delete: {
                                     requestDelete(focusedHome)
                                 }
@@ -2227,7 +2246,7 @@ struct HomeportMenuView: View {
                 }
                 // Let the scroll region yield to the fixed tab/quit footer on
                 // shorter screens and when banners make the header taller.
-                .frame(minHeight: 240, maxHeight: 560)
+                .frame(minHeight: 240, maxHeight: .infinity)
 
                 if focusedHome == nil {
                     PhoneTabBar(selectedTab: $selectedTab) {
@@ -2247,8 +2266,11 @@ struct HomeportMenuView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+
+                MenuResizeHandle(panelHeight: $panelHeight)
             }
             .frame(width: 390)
+            .frame(maxHeight: .infinity)
             .blur(radius: pendingDeleteHome == nil ? 0 : 1.5)
             .disabled(pendingDeleteHome != nil)
 
@@ -2276,6 +2298,9 @@ struct HomeportMenuView: View {
         .sheet(isPresented: $showsAddFavoriteSheet) {
             AddFavoriteSheet()
                 .environmentObject(model)
+        }
+        .onAppear {
+            panelHeight = MenuPanelSizing.clamped(panelHeight)
         }
     }
 
@@ -2323,6 +2348,12 @@ struct HomeportMenuView: View {
 
     private var headerTitle: String {
         focusedHome?.name ?? selectedTab.title
+    }
+
+    private func setFocusedHomePinned(_ home: CodexHome, pinned: Bool) {
+        model.setHomePinned(home, pinned: pinned)
+        let homeID = home.id
+        focusedHome = model.state.homes.first(where: { $0.id == homeID }) ?? home
     }
 
     private var headerSubtitle: String {
@@ -2559,6 +2590,37 @@ struct HomeportMenuView: View {
                 model.status = error.localizedDescription
             }
         }
+    }
+}
+
+private struct MenuResizeHandle: View {
+    @Binding var panelHeight: Double
+    @State private var dragStartHeight: Double?
+
+    var body: some View {
+        Capsule()
+            .fill(Color.secondary.opacity(0.45))
+            .frame(width: 48, height: 4)
+            .frame(maxWidth: .infinity)
+            .frame(height: 16)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        let start = dragStartHeight ?? panelHeight
+                        dragStartHeight = start
+                        panelHeight = MenuPanelSizing.clamped(start + Double(value.translation.height))
+                    }
+                    .onEnded { _ in
+                        dragStartHeight = nil
+                    }
+            )
+            .onTapGesture(count: 2) {
+                panelHeight = MenuPanelSizing.clamped(MenuPanelSizing.defaultHeight)
+            }
+            .help("Drag to resize the menu. Double-click to reset.")
+            .accessibilityLabel("Resize Multihome menu")
+            .accessibilityHint("Drag vertically to resize. Double-click to reset.")
     }
 }
 
@@ -3412,14 +3474,13 @@ struct ProviderLoginRow: View {
                 .controlSize(.small)
                 .help(isEnabled ? "Disable \(provider.title) for shim" : "Enable \(provider.title) for shim")
             Button(action: action) {
-                Label("Login", systemImage: "terminal")
-                    .labelStyle(.iconOnly)
+                Label("Sign in", systemImage: "terminal")
                     .font(.caption.weight(.semibold))
-                    .frame(width: 26, height: 24)
+                    .fixedSize()
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Open \(provider.title) login in \(terminalName)")
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Open \(provider.title) sign-in in \(terminalName)")
         }
         .padding(9)
         .background(.background, in: RoundedRectangle(cornerRadius: 10))
@@ -3889,7 +3950,7 @@ struct HomeDetailHero: View {
                 .lineLimit(2)
 
             HStack {
-                LaunchActionPair(launch: launch)
+                LaunchActionPair(launch: launch, routing: home.modelRouting)
                 Spacer()
                 Text(home.slug)
                     .font(.caption2.weight(.semibold))
@@ -3979,7 +4040,38 @@ struct ModelRoutingPanel: View {
         return "\(isEnabled)|\(providerKey)"
     }
 
+    private var enabledSourceSummary: String {
+        let count = providers.count
+        return count == 1 ? "1 model source available" : "\(count) model sources available"
+    }
+
     var body: some View {
+        if home.kind == .main {
+            HStack(spacing: 10) {
+                Image(systemName: "lock.shield")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Model routing is off for the Main home")
+                        .font(.caption.weight(.semibold))
+                    Text("Your default Codex install stays untouched. Use a clone or temporary home for shim providers like GitHub Copilot.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        } else {
+            routingControls
+        }
+    }
+
+    private var routingControls: some View {
         VStack(alignment: .leading, spacing: 10) {
             Toggle(isOn: Binding(
                 get: { isEnabled },
@@ -3992,9 +4084,9 @@ struct ModelRoutingPanel: View {
                         .frame(width: 24, height: 24)
                         .background((isEnabled ? Color.indigo : Color.secondary).opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Route models through shim")
+                        Text("Use model routing for this home")
                             .font(.caption.weight(.semibold))
-                        Text(isEnabled ? "App and Term launches wire the shim first" : "Launches use this home's normal models")
+                        Text(isEnabled ? "\(enabledSourceSummary) • one model runs at a time" : "App and Term use this home's normal Codex model")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
@@ -4009,6 +4101,22 @@ struct ModelRoutingPanel: View {
 
             if isEnabled {
                 Divider()
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("What launches?", systemImage: "arrow.up.forward.app")
+                        .font(.caption.weight(.semibold))
+                    Text("App and Term each open one Codex session. These checks only control which model sources appear; the last model you chose stays active when available.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.indigo.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
+
+                Text("MODELS AVAILABLE FROM")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
 
                 VStack(spacing: 6) {
                     ForEach(ShimLoginProvider.allCases) { provider in
@@ -4027,6 +4135,14 @@ struct ModelRoutingPanel: View {
                     }
                 }
 
+                Label(
+                    "Sign in opens the provider's login flow in \(model.state.preferredTerminal.displayName). Finish there, then choose Restart to refresh models.",
+                    systemImage: "terminal.fill"
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
                 Text(catalogSummary)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -4036,7 +4152,7 @@ struct ModelRoutingPanel: View {
                     Button {
                         model.openRoutingPicker(for: home)
                     } label: {
-                        Label("Model Picker", systemImage: "slider.horizontal.3")
+                        Label("Choose Model", systemImage: "slider.horizontal.3")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
@@ -4215,7 +4331,7 @@ struct HomeListRow: View {
                     .buttonStyle(.plain)
                     .help("Open details for \(home.name)")
                     Spacer(minLength: 8)
-                    LaunchActionPair(launch: launch)
+                    LaunchActionPair(launch: launch, routing: home.modelRouting)
                         .opacity(isEditing ? 0.45 : 1)
                     Button(action: openDetail) {
                         Image(systemName: "pencil")
@@ -4372,8 +4488,16 @@ struct HomeTags: View {
 
     private var tags: [(label: String, symbol: String, color: Color, help: String)] {
         var tags: [(label: String, symbol: String, color: Color, help: String)] = []
-        if home.modelRouting?.isEnabled == true {
-            tags.append(("Shim", "point.3.connected.trianglepath.dotted", .indigo, "This home uses model routing through codex-shim."))
+        if let routing = home.modelRouting, routing.isEnabled {
+            let sources = ShimLoginProvider.allCases.filter { routing.providers.contains($0.rawValue) }
+            let label = sources.isEmpty
+                ? "No model sources"
+                : (sources.count == 1 ? "1 model source" : "\(sources.count) model sources")
+            let names = sources.map(\.title).joined(separator: ", ")
+            let help = sources.isEmpty
+                ? "Routing is on, but App and Term cannot launch until a model source is enabled."
+                : "App and Term open one routed Codex session. Available sources: \(names). One chosen model is active at a time."
+            tags.append((label, "point.3.connected.trianglepath.dotted", sources.isEmpty ? .orange : .indigo, help))
         }
         if let policies = home.clonePolicies {
             if policies.linkedCategoryCount > 0 {
@@ -4542,23 +4666,49 @@ struct CleanupReviewRow: View {
 
 struct LaunchActionPair: View {
     var launch: (LaunchTarget) -> Void
+    var routing: ModelRoutingConfig? = nil
+
+    private var usesRouting: Bool {
+        routing?.isEnabled == true
+    }
+
+    private var routingHelpSuffix: String {
+        guard usesRouting else { return "" }
+        let count = routing?.providers.count ?? 0
+        let sources = count == 1 ? "1 model source" : "\(count) model sources"
+        return " through routing (\(sources), one active model)"
+    }
 
     var body: some View {
         HStack(spacing: 6) {
             Button {
                 launch(.desktop)
             } label: {
-                Label("App", systemImage: "macwindow")
-                    .labelStyle(.titleAndIcon)
+                HStack(spacing: 4) {
+                    Label("App", systemImage: "macwindow")
+                        .labelStyle(.titleAndIcon)
+                    if usesRouting {
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.indigo)
+                    }
+                }
             }
-            .help("Open in Codex app")
+            .help("Open in Codex app\(routingHelpSuffix)")
             Button {
                 launch(.terminal)
             } label: {
-                Label("Term", systemImage: "terminal")
-                    .labelStyle(.titleAndIcon)
+                HStack(spacing: 4) {
+                    Label("Term", systemImage: "terminal")
+                        .labelStyle(.titleAndIcon)
+                    if usesRouting {
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.indigo)
+                    }
+                }
             }
-            .help("Open in Terminal")
+            .help("Open in Terminal\(routingHelpSuffix)")
         }
         .buttonStyle(.bordered)
         .controlSize(.small)

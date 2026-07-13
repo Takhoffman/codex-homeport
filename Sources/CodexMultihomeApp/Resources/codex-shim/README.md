@@ -631,10 +631,13 @@ Prerequisites:
 - the `copilot` executable available on `PATH` (verify with `copilot --version`);
 - an active CLI login created with `copilot login`.
 
-For the Multihome app, open the home's **Model Routing** panel, enable **Route
+For the Multihome app, open the home's **Model Routing** panel (available on
+clones, clean rooms, and temporary homes; the Main home always launches the
+untouched default Codex install), enable **Route
 models through shim** and **GitHub Copilot**, and use the provider row's
-**Login** button if needed. Choose **Restart** after login so the shim refreshes
-the model catalog, then open **Model Picker** and select a `copilot-*` entry.
+**Sign in** button to open `copilot login` in your configured Terminal if
+needed. Choose **Restart** after sign-in so the shim refreshes the model catalog,
+then open **Model Picker** and select a `copilot-*` entry.
 
 The equivalent CLI flow is:
 
