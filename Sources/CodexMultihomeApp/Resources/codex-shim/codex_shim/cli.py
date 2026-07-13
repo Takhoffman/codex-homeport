@@ -1004,7 +1004,8 @@ def _patch_codex_app_bundle(codex_app: Path, *, quit_first: bool) -> int:
     if not info_plist.exists():
         print(f"Codex Info.plist not found at {info_plist}.", file=sys.stderr)
         return 1
-    if not _has_command("npx"):
+    npx = _command_path("npx")
+    if npx is None:
         print("npx is required to patch the Electron asar bundle.", file=sys.stderr)
         return 1
 
@@ -1029,12 +1030,12 @@ def _patch_codex_app_bundle(codex_app: Path, *, quit_first: bool) -> int:
         shutil.rmtree(workdir)
     workdir.mkdir(parents=True)
 
-    subprocess.run(["npx", "--yes", "asar", "extract", str(app_asar), str(workdir)], check=True)
+    subprocess.run([npx, "--yes", "asar", "extract", str(app_asar), str(workdir)], check=True)
     changed = _patch_codex_desktop_bundles(workdir)
     if changed is None:
         return 1
     if changed:
-        subprocess.run(["npx", "--yes", "asar", "pack", str(workdir), str(app_asar)], check=True)
+        subprocess.run([npx, "--yes", "asar", "pack", str(workdir), str(app_asar)], check=True)
         _update_app_asar_integrity(app_asar, info_plist)
         _resign_codex_app(codex_app)
     return 0
@@ -1068,10 +1069,20 @@ def restore_codex_app_bundle() -> int:
     return 0
 
 
-def _has_command(command: str) -> bool:
-    from shutil import which
-
-    return which(command) is not None
+def _command_path(command: str) -> str | None:
+    discovered = shutil.which(command)
+    if discovered is not None:
+        return discovered
+    if sys.platform != "darwin" or "/" in command:
+        return None
+    # Apps opened from Finder inherit a minimal PATH that normally omits both
+    # Apple Silicon and Intel Homebrew. Check their stable bin directories so
+    # Repair Shim App can still find Node's npx launcher.
+    for directory in (Path("/opt/homebrew/bin"), Path("/usr/local/bin")):
+        candidate = directory / command
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
 
 
 def _app_asar_header_hash(path: Path) -> str:

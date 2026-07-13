@@ -1313,8 +1313,11 @@ final class HomeportModel: ObservableObject {
                 shimStatus = result.summary(successMessage: "Repaired Codex Shim app")
                 if statusResult.succeeded,
                    let data = statusResult.output.data(using: .utf8),
-                   let status = ShimAppBundleStatus(data: data) {
-                    shimAppBundleStatus = status
+                   var inspectedStatus = ShimAppBundleStatus(data: data) {
+                    if !result.succeeded {
+                        inspectedStatus.error = result.summary(successMessage: "")
+                    }
+                    shimAppBundleStatus = inspectedStatus
                 } else {
                     shimAppBundleStatus = ShimAppBundleStatus(error: statusResult.summary(successMessage: ""))
                 }
