@@ -7,6 +7,7 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 RUNTIME="$ROOT/Sources/CodexMultihomeApp/Resources/mitmproxy-runtime"
 PATCH_ASSETS="$ROOT/Sources/CodexMultihomeApp/MitmwebPatch"
 VERSION="12.2.3"
+SHASUM="${SHASUM:-/usr/bin/shasum}"
 
 case "$(uname -m)" in
     arm64) host_platform="arm64" ;;
@@ -22,20 +23,25 @@ fi
 
 for platform in $platforms; do
     case "$platform" in
-        arm64) checksum="0a09ee3b82569e8985aff8186e4792618b8e5d0c766098db093d09a87d4b013a" ;;
-        x86_64) checksum="7998187f5a0d399ab796af4523d3ad830ebe690726a41bc3e1df47a8e477a641" ;;
+        arm64)
+            archive_checksum="0a09ee3b82569e8985aff8186e4792618b8e5d0c766098db093d09a87d4b013a"
+            mitmweb_checksum="9d809ab66ad4e4842c7743d47ee9bc7da61bfcf04be20ea598ee5fc11e9105cf"
+            ;;
+        x86_64)
+            archive_checksum="7998187f5a0d399ab796af4523d3ad830ebe690726a41bc3e1df47a8e477a641"
+            mitmweb_checksum="ec34e26163c8f19efec5b3c540b5c170d4c6a5680139bdb21953c69d97d6473b"
+            ;;
     esac
     destination="$RUNTIME/$platform"
     executable="$destination/mitmproxy.app/Contents/MacOS/mitmweb"
-    version_probe="$destination/mitmproxy.app/Contents/MacOS/mitmdump"
-    if ! ([ -x "$executable" ] && [ -x "$version_probe" ] && "$version_probe" --version 2>/dev/null \
-        | awk -v expected="$VERSION" '$1 == "Mitmproxy:" && $2 == expected { found = 1 } END { exit !found }'); then
+    if ! ([ -x "$executable" ] && printf '%s  %s\n' "$mitmweb_checksum" "$executable" \
+        | "$SHASUM" -a 256 -c - >/dev/null 2>&1); then
         tmp="$(mktemp -d)"
         archive="$tmp/mitmproxy.tar.gz"
         curl --fail --location --silent --show-error \
             "https://downloads.mitmproxy.org/$VERSION/mitmproxy-$VERSION-macos-$platform.tar.gz" \
             --output "$archive"
-        echo "$checksum  $archive" | shasum -a 256 -c -
+        printf '%s  %s\n' "$archive_checksum" "$archive" | "$SHASUM" -a 256 -c -
         rm -rf "$destination"
         mkdir -p "$destination"
         tar -xzf "$archive" -C "$destination"
