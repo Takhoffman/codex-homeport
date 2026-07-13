@@ -32,6 +32,8 @@ jobs:
         run: swift test
       - name: Test model-routing bridge
         run: npm run test:shim
+      - name: Test installer runtime probes
+        run: npm run test:install
       - name: Check package
         run: npm pack --dry-run
       - name: Check npm version

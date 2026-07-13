@@ -27,7 +27,9 @@ for platform in $platforms; do
     esac
     destination="$RUNTIME/$platform"
     executable="$destination/mitmproxy.app/Contents/MacOS/mitmweb"
-    if ! ([ -x "$executable" ] && "$executable" --version 2>/dev/null | grep -q "$VERSION"); then
+    version_probe="$destination/mitmproxy.app/Contents/MacOS/mitmdump"
+    if ! ([ -x "$executable" ] && [ -x "$version_probe" ] && "$version_probe" --version 2>/dev/null \
+        | awk -v expected="$VERSION" '$1 == "Mitmproxy:" && $2 == expected { found = 1 } END { exit !found }'); then
         tmp="$(mktemp -d)"
         archive="$tmp/mitmproxy.tar.gz"
         curl --fail --location --silent --show-error \
