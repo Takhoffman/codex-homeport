@@ -3,6 +3,8 @@
 DerivedData/
 dist/
 Sources/CodexMultihomeApp/Resources/codex-shim/runtime/
+Sources/CodexMultihomeApp/Resources/mitmproxy-runtime/arm64/
+Sources/CodexMultihomeApp/Resources/mitmproxy-runtime/x86_64/
 *.xcodeproj
 *.xcworkspace
 .DS_Store

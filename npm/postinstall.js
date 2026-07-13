@@ -19,6 +19,15 @@ if (runtime.error || runtime.status !== 0) {
   process.exit(runtime.status ?? 1);
 }
 
+const mitmRuntime = spawnSync("sh", [path.join(root, "scripts", "prepare-mitmproxy-runtime.sh")], {
+  stdio: "inherit"
+});
+if (mitmRuntime.error || mitmRuntime.status !== 0) {
+  console.error("Could not prepare Codex Multihome's bundled mitmproxy runtime.");
+  if (mitmRuntime.error) console.error(mitmRuntime.error.message);
+  process.exit(mitmRuntime.status ?? 1);
+}
+
 const result = spawnSync("swift", ["build", "--package-path", root, "-c", "release", "--product", "homeport"], {
   stdio: "inherit"
 });

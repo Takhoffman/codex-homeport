@@ -23,8 +23,10 @@ let package = Package(
         .executableTarget(
             name: "CodexMultihomeApp",
             dependencies: ["HomeportCore"],
+            exclude: ["MitmwebPatch"],
             resources: [
-                .copy("Resources/codex-shim")
+                .copy("Resources/codex-shim"),
+                .copy("Resources/mitmproxy-runtime")
             ]
         ),
         .testTarget(

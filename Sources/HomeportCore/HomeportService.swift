@@ -7,6 +7,7 @@ public final class HomeportService: @unchecked Sendable {
     private let copier: FileCopier
     private let launcher: Launcher
     private let diagnostics: Diagnostics
+    private let mitmProxy: MitmProxyManager
     private let fileManager: FileManager
 
     public init(paths: HomeportPaths = HomeportPaths(), fileManager: FileManager = .default) {
@@ -16,6 +17,7 @@ public final class HomeportService: @unchecked Sendable {
         self.copier = FileCopier(fileManager: fileManager)
         self.launcher = Launcher(paths: paths, fileManager: fileManager)
         self.diagnostics = Diagnostics(paths: paths, fileManager: fileManager)
+        self.mitmProxy = MitmProxyManager(paths: paths, fileManager: fileManager)
     }
 
     public func loadState() throws -> HomeportState {
@@ -295,7 +297,8 @@ public final class HomeportService: @unchecked Sendable {
         target: LaunchTarget,
         workspace: String? = nil,
         terminal: TerminalApp? = nil,
-        appBundle: URL? = nil
+        appBundle: URL? = nil,
+        proxyEnabledOverride: Bool? = nil
     ) throws -> LaunchedInstance {
         var state = try store.load()
         reconcileInstances(in: &state)
@@ -311,6 +314,16 @@ public final class HomeportService: @unchecked Sendable {
             isEnabled: state.preferences.browserUseLocalTestingMode
         )
         let selectedTerminal = terminal ?? state.preferredTerminal
+        let proxyEnabled = proxyEnabledOverride ?? state.preferences.mitmProxyEnabled
+        var proxyCAPath: String?
+        var launchProxyURL: String?
+        if proxyEnabled {
+            let proxy = try mitmProxy.start(homeID: home.id)
+            launchProxyURL = proxy.proxyURL
+            proxyCAPath = state.preferences.mitmProxyCACertificatePath.isEmpty
+                ? mitmProxy.caCertificate.path
+                : state.preferences.mitmProxyCACertificatePath
+        }
         let pid = try launcher.launch(
             home: home,
             target: target,
@@ -318,7 +331,9 @@ public final class HomeportService: @unchecked Sendable {
             terminal: selectedTerminal,
             appBundle: appBundle,
             browserUseLocalTestingMode: state.preferences.browserUseLocalTestingMode,
-            desktopAppDevFlavor: state.preferences.desktopAppDevFlavor
+            desktopAppDevFlavor: state.preferences.desktopAppDevFlavor,
+            proxyURL: launchProxyURL,
+            proxyCACertificatePath: proxyCAPath
         )
         let launchedProfilePath = target == .desktop && appBundle != nil
             ? home.profilePath.map { "\($0)-shim" }
@@ -332,13 +347,27 @@ public final class HomeportService: @unchecked Sendable {
             pid: pid,
             workspacePath: workspace,
             terminalApp: target == .terminal ? selectedTerminal : nil,
-            cleanupReviewRequired: home.isTemporary
+            cleanupReviewRequired: home.isTemporary,
+            usedShim: appBundle != nil,
+            usedProxy: proxyEnabled
         )
         state.instances.insert(instance, at: 0)
         state.lastWorkspacePath = workspace ?? state.lastWorkspacePath
         try store.save(state)
         return instance
     }
+
+    public func mitmProxyStatus(homeID: UUID? = nil) -> MitmProxyStatus { mitmProxy.status(homeID: homeID) }
+
+    public func mitmProxyURLs(homeID: UUID) -> (proxy: String, web: String) {
+        let ports = mitmProxy.ports(for: homeID)
+        return ("http://127.0.0.1:\(ports.proxy)", "http://127.0.0.1:\(ports.web)")
+    }
+
+    @discardableResult
+    public func startMitmProxy(homeID: UUID? = nil) throws -> MitmProxyStatus { try mitmProxy.start(homeID: homeID) }
+
+    public func stopMitmProxy(homeID: UUID? = nil) throws { try mitmProxy.stop(homeID: homeID) }
 
     public func markClosed(instanceID: UUID) throws {
         var state = try store.load()

@@ -2,6 +2,11 @@ import Foundation
 import SwiftUI
 import HomeportCore
 
+private let cachedBundledShimExecutablePath: String? = Bundle.module.resourceURL?
+    .appendingPathComponent("codex-shim", isDirectory: true)
+    .appendingPathComponent("run-codex-shim")
+    .path
+
 @main
 struct CodexMultihomeApp: App {
     @StateObject private var model = HomeportModel()
@@ -187,28 +192,107 @@ final class HomeportModel: ObservableObject {
     /// continues asynchronously (catalog publish, shim wiring) and later failures are
     /// reported through `status`/`shimStatus`, not this return value.
     @discardableResult
-    func launch(_ selector: String, target: LaunchTarget) -> Bool {
+    func launch(_ selector: String, target: LaunchTarget, proxyEnabledOverride: Bool? = nil) -> Bool {
         let actualSelector = modelSelector(for: selector)
         if let home = resolveHome(selector: actualSelector), routingEnabled(for: home) {
-            launchWithRouting(home: home, target: target)
+            launchWithRouting(home: home, target: target, proxyEnabledOverride: proxyEnabledOverride)
             return true
         }
-        return performLaunch(actualSelector, target: target)
+        return performLaunch(actualSelector, target: target, proxyEnabledOverride: proxyEnabledOverride)
     }
 
     @discardableResult
-    func performLaunch(_ selector: String, target: LaunchTarget, appBundle: URL? = nil) -> Bool {
+    func performLaunch(
+        _ selector: String,
+        target: LaunchTarget,
+        appBundle: URL? = nil,
+        proxyEnabledOverride: Bool? = nil
+    ) -> Bool {
         do {
             let actualSelector = modelSelector(for: selector)
             let missingLinks = try service.brokenLinkedTargets(selector: actualSelector)
-            let instance = try service.launch(selector: actualSelector, target: target, workspace: workspacePath, appBundle: appBundle)
+            let instance = try service.launch(
+                selector: actualSelector,
+                target: target,
+                workspace: workspacePath,
+                appBundle: appBundle,
+                proxyEnabledOverride: proxyEnabledOverride
+            )
             let warning = missingLinks.isEmpty ? "" : "; linked paths missing: \(missingLinks.joined(separator: ", "))"
-            refresh(statusMessage: "Opened \(instance.homeName) in \(target.rawValue)\(warning)")
+            let proxyNote: String
+            if proxyEnabledOverride == true,
+               let home = resolveHome(selector: actualSelector) {
+                let urls = service.mitmProxyURLs(homeID: home.id)
+                proxyNote = "; capture active at \(urls.proxy) — use the newly opened window"
+            } else {
+                proxyNote = ""
+            }
+            refresh(statusMessage: "Opened \(instance.homeName) in \(target.rawValue)\(proxyNote)\(warning)")
             return true
         } catch {
             status = error.localizedDescription
             return false
         }
+    }
+
+    func copyMITMInspectionPrompt(for home: CodexHome) {
+        let proxy = service.mitmProxyStatus(homeID: home.id)
+        let decoder = proxy.executablePath?
+            .replacingOccurrences(of: "/mitmweb", with: "/mitmdump")
+            ?? "<bundled mitmdump path unavailable>"
+        let prompt = """
+        Inspect the Codex Multihome MITM capture at:
+        \(proxy.flowArchivePath)
+
+        The launch came from Multihome home "\(home.name)" (slug: \(home.slug), CODEX_HOME: \(home.homePath)). The archive is shared by proxied launches in this Multihome channel, so prioritize the newest flows associated with the task I just ran.
+
+        Decode it read-only with the bundled tool:
+        \(decoder) -nr \(shellQuote(proxy.flowArchivePath)) --set flow_detail=1
+
+        Start with safe metadata: request count, hosts, methods, status codes, timing, and errors. Treat headers, cookies, authorization values, prompts, and response bodies as sensitive. Do not print secrets or transmit the archive. Only inspect bodies if needed for my question, and redact credentials and personal data in the answer.
+        """
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(prompt, forType: .string)
+        status = "Copied MITM inspection prompt"
+    }
+
+    func openMITMWeb(for home: CodexHome) {
+        do {
+            let proxy = try service.startMitmProxy(homeID: home.id)
+            guard let inspectorURL = URL(string: proxy.webURL) else { throw HomeportError.commandFailed("Invalid MITM Web URL.") }
+            NSWorkspace.shared.open(inspectorURL)
+            status = "Opened MITM Web inspector"
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func copyMITMWebToken(for home: CodexHome) {
+        do {
+            let proxy = try service.startMitmProxy(homeID: home.id)
+            guard let token = proxy.webToken, !token.isEmpty else {
+                throw HomeportError.commandFailed("MITM Web token is unavailable.")
+            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(token, forType: .string)
+            status = "Copied MITM Web token for \(home.name)"
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func stopMITMProxy(for home: CodexHome) {
+        do {
+            try service.stopMitmProxy(homeID: home.id)
+            status = "Stopped MITM capture for \(home.name)"
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func mitmProxyEndpointSummary(for home: CodexHome) -> String {
+        let urls = service.mitmProxyURLs(homeID: home.id)
+        return "Proxy \(urls.proxy) • Web \(urls.web)"
     }
 
     private func resolveHome(selector: String) -> CodexHome? {
@@ -451,6 +535,38 @@ final class HomeportModel: ObservableObject {
         next.preferences.desktopAppDevFlavor = value
         state = next
         scheduleDevelopmentLaunchSave()
+    }
+
+    func setMITMProxy(enabled: Bool? = nil, url: String? = nil, caCertificatePath: String? = nil) {
+        do {
+            var next = try service.loadState()
+            if let enabled { next.preferences.mitmProxyEnabled = enabled }
+            if let url { next.preferences.mitmProxyURL = url }
+            if let caCertificatePath { next.preferences.mitmProxyCACertificatePath = caCertificatePath }
+            try service.saveState(next)
+            state = next
+            status = "Saved proxy launch settings"
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func startMITMProxy() {
+        do {
+            let proxy = try service.startMitmProxy()
+            status = "Bundled mitmweb is running\(proxy.pid.map { " (pid \($0))" } ?? "")"
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func stopMITMProxy() {
+        do {
+            try service.stopMitmProxy()
+            status = "Bundled mitmweb stopped"
+        } catch {
+            status = error.localizedDescription
+        }
     }
 
     private func scheduleDevelopmentLaunchSave() {
@@ -733,7 +849,16 @@ final class HomeportModel: ObservableObject {
         }
     }
 
-    func launchCodexWithShim(home: CodexHome, target: LaunchTarget, executablePath: String, settingsPath: String, port: String, defaultModelSlug: String?, commandEnvironment: [String: String] = ProcessInfo.processInfo.environment) {
+    func launchCodexWithShim(
+        home: CodexHome,
+        target: LaunchTarget,
+        executablePath: String,
+        settingsPath: String,
+        port: String,
+        defaultModelSlug: String?,
+        proxyEnabledOverride: Bool? = nil,
+        commandEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
         let resolvedExecutable = resolveShimExecutable(executablePath)
         let baseArguments = shimBaseArguments(home: home, settingsPath: settingsPath, port: port)
 
@@ -808,7 +933,12 @@ final class HomeportModel: ObservableObject {
                         ? "Opening \(home.name) in Codex Shim"
                         : "Opening \(home.name) in Terminal with shim"
                     status = shimStatus
-                    let launched = performLaunch(home.slug, target: target, appBundle: appBundle)
+                    let launched = performLaunch(
+                        home.slug,
+                        target: target,
+                        appBundle: appBundle,
+                        proxyEnabledOverride: proxyEnabledOverride
+                    )
                     shimStatus = launched
                         ? "Opened \(home.name) in \(target.rawValue) with shim"
                         : "Shim started, but launching \(home.name) failed: \(status)"
@@ -904,9 +1034,26 @@ final class HomeportModel: ObservableObject {
         }
     }
 
-    func launchWithRouting(home: CodexHome, target: LaunchTarget) {
+    func launchWithRouting(home: CodexHome, target: LaunchTarget, proxyEnabledOverride: Bool? = nil) {
         withRoutingCatalog(for: home) { [weak self] catalog, providers in
             guard let self else { return }
+            var environment = shimCommandEnvironment(enabledProviders: providers)
+            if proxyEnabledOverride == true {
+                do {
+                    let proxy = try service.startMitmProxy(homeID: home.id)
+                    environment["HTTP_PROXY"] = proxy.proxyURL
+                    environment["HTTPS_PROXY"] = proxy.proxyURL
+                    environment["http_proxy"] = proxy.proxyURL
+                    environment["https_proxy"] = proxy.proxyURL
+                    environment["NO_PROXY"] = "127.0.0.1,localhost,::1"
+                    environment["no_proxy"] = "127.0.0.1,localhost,::1"
+                    environment["SSL_CERT_FILE"] = proxy.caCertificatePath
+                    environment["NODE_EXTRA_CA_CERTS"] = proxy.caCertificatePath
+                } catch {
+                    status = error.localizedDescription
+                    return
+                }
+            }
             self.launchCodexWithShim(
                 home: home,
                 target: target,
@@ -914,7 +1061,8 @@ final class HomeportModel: ObservableObject {
                 settingsPath: catalog.path,
                 port: self.state.preferences.shimPort,
                 defaultModelSlug: catalog.defaultModelSlug,
-                commandEnvironment: shimCommandEnvironment(enabledProviders: providers)
+                proxyEnabledOverride: proxyEnabledOverride,
+                commandEnvironment: environment
             )
         }
     }
@@ -1179,10 +1327,7 @@ final class HomeportModel: ObservableObject {
     }
 
     private func bundledShimExecutablePath() -> String? {
-        Bundle.module.resourceURL?
-            .appendingPathComponent("codex-shim", isDirectory: true)
-            .appendingPathComponent("run-codex-shim")
-            .path
+        cachedBundledShimExecutablePath
     }
 
     private func modelSelector(for selector: String) -> String {
@@ -2020,7 +2165,9 @@ struct HomeportMenuView: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, 12)
                 }
-                .frame(minHeight: 360, maxHeight: 560)
+                // Let the scroll region yield to the fixed tab/quit footer on
+                // shorter screens and when banners make the header taller.
+                .frame(minHeight: 240, maxHeight: 560)
 
                 if focusedHome == nil {
                     PhoneTabBar(selectedTab: $selectedTab) {
@@ -2445,7 +2592,7 @@ struct UpdateAvailableBanner: View {
     var dismiss: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 7) {
             Circle()
                 .fill(.red)
                 .frame(width: 7, height: 7)
@@ -2625,7 +2772,11 @@ struct FavoritesTab: View {
             }
             if let recent = model.recentInstances.first {
                 SectionLabel("Recent")
-                RecentLaunchRow(instance: recent, isEditing: isEditing)
+                RecentLaunchRow(
+                    instance: recent,
+                    isEditing: isEditing,
+                    openDetail: { home in openDetail(home) }
+                )
             }
             LaunchHealthBanner()
             Button("Open Console", action: openConsole)
@@ -2759,8 +2910,17 @@ struct LaunchModeStrip: View {
         )
     }
 
+    private var proxyBinding: Binding<Bool> {
+        Binding(
+            get: { model.state.preferences.mitmProxyEnabled },
+            set: { model.setMITMProxy(enabled: $0) }
+        )
+    }
+
     private var isUsingDevMode: Bool {
-        model.state.preferences.browserUseLocalTestingMode || model.state.preferences.desktopAppDevFlavor
+        model.state.preferences.browserUseLocalTestingMode
+            || model.state.preferences.desktopAppDevFlavor
+            || model.state.preferences.mitmProxyEnabled
     }
 
     var body: some View {
@@ -2771,11 +2931,13 @@ struct LaunchModeStrip: View {
                 .frame(width: 20, height: 20)
                 .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 6))
 
-            Text("Dev launch:")
+            Text("Dev:")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 3)
 
             Toggle("Browser", isOn: browserDevBinding)
                 .toggleStyle(.switch)
@@ -2787,7 +2949,13 @@ struct LaunchModeStrip: View {
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .help("Launch Codex Desktop with BUILD_FLAVOR=dev")
-            .fixedSize()
+                .fixedSize()
+
+            Toggle("Proxy", isOn: proxyBinding)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .help("Start bundled mitmweb and launch Codex through it")
+                .fixedSize()
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -2816,7 +2984,7 @@ struct RecentsTab: View {
             if !model.activeInstances.isEmpty {
                 SectionLabel("Open Now")
                 ForEach(model.activeInstances) { instance in
-                    RecentLaunchRow(instance: instance, isEditing: isEditing, showsStatus: true)
+                    RecentLaunchRow(instance: instance, isEditing: isEditing, showsStatus: true, openDetail: openDetail)
                 }
             }
             SectionLabel("Recent Opens")
@@ -2828,13 +2996,13 @@ struct RecentsTab: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.recentInstances) { instance in
-                    RecentLaunchRow(instance: instance, isEditing: isEditing)
+                    RecentLaunchRow(instance: instance, isEditing: isEditing, openDetail: openDetail)
                 }
             }
             if !pending.isEmpty {
                 SectionLabel("Cleanup Review")
                 ForEach(pending) { instance in
-                    CleanupReviewRow(instance: instance)
+                    CleanupReviewRow(instance: instance, openDetail: openDetail)
                 }
             }
         }
@@ -3252,6 +3420,36 @@ struct SettingsTab: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
             }
+            VStack(alignment: .leading, spacing: 7) {
+                Toggle("Launch through MITM proxy", isOn: Binding(
+                    get: { model.state.preferences.mitmProxyEnabled },
+                    set: { model.setMITMProxy(enabled: $0) }
+                ))
+                TextField("Proxy URL", text: Binding(
+                    get: { model.state.preferences.mitmProxyURL },
+                    set: { model.setMITMProxy(url: $0) }
+                ))
+                .textFieldStyle(.roundedBorder)
+                TextField("CA certificate path (optional)", text: Binding(
+                    get: { model.state.preferences.mitmProxyCACertificatePath },
+                    set: { model.setMITMProxy(caCertificatePath: $0) }
+                ))
+                .textFieldStyle(.roundedBorder)
+                Text("Automatically starts bundled mitmweb, sets HTTP(S)_PROXY for CLI and Desktop, adds Electron's --proxy-server flag, and uses the generated CA unless another PEM path is set.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+                HStack {
+                    Button("Start proxy") { model.startMITMProxy() }
+                    Button("Stop proxy") { model.stopMITMProxy() }
+                    if let port = URL(string: model.state.preferences.mitmProxyURL)?.port {
+                        Button("Open inspector") {
+                            NSWorkspace.shared.open(URL(string: "http://127.0.0.1:\(port + 1)")!)
+                        }
+                    }
+                }
+                .buttonStyle(.bordered)
+            }
             SectionLabel("Model Routing")
             ShimSetupCard()
             SectionLabel("Install")
@@ -3491,6 +3689,9 @@ struct FocusedHomeView: View {
                 }
             }
 
+            SectionLabel("Traffic Capture")
+            ProxyCapturePanel(home: home)
+
             SectionLabel("Model Routing")
             ModelRoutingPanel(home: home)
 
@@ -3505,6 +3706,72 @@ struct FocusedHomeView: View {
                 delete: delete
             )
         }
+    }
+}
+
+struct ProxyCapturePanel: View {
+    @EnvironmentObject var model: HomeportModel
+    var home: CodexHome
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: "shield.lefthalf.filled")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Launch this home through proxy")
+                        .font(.caption.weight(.semibold))
+                    Text("Only the newly opened window is captured. Existing ChatGPT windows remain direct.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(model.mitmProxyEndpointSummary(for: home))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+            }
+            HStack(spacing: 8) {
+                Button {
+                    model.launch(home.slug, target: .desktop, proxyEnabledOverride: true)
+                } label: {
+                    Label("Proxy App", systemImage: "macwindow")
+                }
+                Button {
+                    model.launch(home.slug, target: .terminal, proxyEnabledOverride: true)
+                } label: {
+                    Label("Proxy Term", systemImage: "terminal")
+                }
+                Spacer(minLength: 4)
+            }
+            HStack {
+                Button {
+                    model.openMITMWeb(for: home)
+                } label: {
+                    Label("Open MITM Web", systemImage: "safari")
+                }
+                Button {
+                    model.copyMITMWebToken(for: home)
+                } label: {
+                    Label("Copy Web Token", systemImage: "key.fill")
+                }
+                Button {
+                    model.copyMITMInspectionPrompt(for: home)
+                } label: {
+                    Label("Copy agent prompt", systemImage: "doc.on.doc")
+                }
+                Button(role: .destructive) {
+                    model.stopMITMProxy(for: home)
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                Spacer()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.orange.opacity(0.18)))
     }
 }
 
@@ -3890,6 +4157,13 @@ struct HomeListRow: View {
                     Spacer(minLength: 8)
                     LaunchActionPair(launch: launch)
                         .opacity(isEditing ? 0.45 : 1)
+                    Button(action: openDetail) {
+                        Image(systemName: "pencil")
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Open details and edit \(home.name)")
                 }
                 Button(action: openDetail) {
                     Text(subtitle)
@@ -3956,6 +4230,8 @@ struct HomePillStrip: View {
     @EnvironmentObject var model: HomeportModel
     var home: CodexHome
     var showsOpenStatus = false
+    var launchUsedShim = false
+    var launchUsedProxy = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -3970,6 +4246,22 @@ struct HomePillStrip: View {
                             .id("pill-strip-start")
                         HomeKindTag(home: home)
                         HomeTags(home: home)
+                        if launchUsedShim {
+                            TagChip(
+                                label: "Shim",
+                                symbol: "arrow.triangle.branch",
+                                color: .indigo,
+                                helpText: "This instance launched through codex-shim."
+                            )
+                        }
+                        if launchUsedProxy {
+                            TagChip(
+                                label: "MITM",
+                                symbol: "network.badge.shield.half.filled",
+                                color: .orange,
+                                helpText: "MITM traffic capture was enabled for this instance."
+                            )
+                        }
                         HomeAuthTag(home: home)
                         if showsOpenStatus {
                             TagChip(
@@ -4021,7 +4313,7 @@ struct HomeTags: View {
     private var tags: [(label: String, symbol: String, color: Color, help: String)] {
         var tags: [(label: String, symbol: String, color: Color, help: String)] = []
         if home.modelRouting?.isEnabled == true {
-            tags.append(("Routed", "point.3.connected.trianglepath.dotted", .indigo, "Model routing through codex-shim is enabled for this home."))
+            tags.append(("Shim", "point.3.connected.trianglepath.dotted", .indigo, "This home uses model routing through codex-shim."))
         }
         if let policies = home.clonePolicies {
             if policies.linkedCategoryCount > 0 {
@@ -4074,6 +4366,7 @@ struct RecentLaunchRow: View {
     var instance: LaunchedInstance
     var isEditing: Bool
     var showsStatus: Bool = false
+    var openDetail: ((CodexHome) -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 8) {
@@ -4092,13 +4385,29 @@ struct RecentLaunchRow: View {
                         model.launchRecent(instance, target: target)
                     }
                     .opacity(isEditing ? 0.45 : 1)
+                    if let home = resolvedHome, let openDetail {
+                        Button {
+                            openDetail(home)
+                        } label: {
+                            Image(systemName: "pencil")
+                                .frame(width: 24, height: 24)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Open details and edit \(home.name)")
+                    }
                 }
                 Text("\(targetLabel(instance.target)) • \(relativeTime(instance.launchedAt)) • \(instance.workspacePath ?? "no workspace")")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 if let home = resolvedHome {
-                    HomePillStrip(home: home, showsOpenStatus: showsStatus)
+                    HomePillStrip(
+                        home: home,
+                        showsOpenStatus: showsStatus,
+                        launchUsedShim: instance.usedShim == true,
+                        launchUsedProxy: instance.usedProxy == true
+                    )
                 } else if showsStatus {
                     TagChip(
                         label: "Open",
@@ -4123,6 +4432,7 @@ struct RecentLaunchRow: View {
 struct CleanupReviewRow: View {
     @EnvironmentObject var model: HomeportModel
     var instance: LaunchedInstance
+    var openDetail: ((CodexHome) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -4138,6 +4448,17 @@ struct CleanupReviewRow: View {
                 LaunchActionPair { target in
                     model.launchRecent(instance, target: target)
                 }
+                if let home = resolvedHome, let openDetail {
+                    Button {
+                        openDetail(home)
+                    } label: {
+                        Image(systemName: "pencil")
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Open details and edit \(home.name)")
+                }
             }
             HStack {
                 Button("Promote") {
@@ -4152,6 +4473,10 @@ struct CleanupReviewRow: View {
         }
         .padding(10)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var resolvedHome: CodexHome? {
+        model.state.homes.first { $0.id == instance.homeID }
     }
 }
 

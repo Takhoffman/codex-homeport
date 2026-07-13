@@ -421,6 +421,38 @@ final class HomeportCoreTests: XCTestCase {
         )
     }
 
+    func testTerminalCommandCanUseMITMProxy() {
+        let home = CodexHome(name: "Main", slug: "main", kind: .main, homePath: "/tmp/home", profilePath: nil)
+        let command = Launcher().terminalShellCommand(
+            home: home,
+            workspace: "/tmp/work",
+            proxyURL: "http://127.0.0.1:8080",
+            proxyCACertificatePath: "/tmp/mitm ca.pem"
+        )
+        XCTAssertTrue(command.contains("HTTPS_PROXY='http://127.0.0.1:8080'"))
+        XCTAssertTrue(command.contains("SSL_CERT_FILE='/tmp/mitm ca.pem'"))
+        XCTAssertTrue(command.contains("NODE_EXTRA_CA_CERTS='/tmp/mitm ca.pem'"))
+    }
+
+    func testProxyEnvironmentHelper() {
+        var environment = ["OTHER": "1"]
+        applyProxy(proxyURL: "http://localhost:8080", caCertificatePath: "/tmp/ca.pem", to: &environment)
+        XCTAssertEqual(environment["HTTPS_PROXY"], "http://localhost:8080")
+        XCTAssertEqual(environment["http_proxy"], "http://localhost:8080")
+        XCTAssertEqual(environment["SSL_CERT_FILE"], "/tmp/ca.pem")
+        XCTAssertEqual(environment["NODE_EXTRA_CA_CERTS"], "/tmp/ca.pem")
+    }
+
+    func testPerHomeProxyPortsAndPathsAreStableAndIsolated() {
+        let manager = MitmProxyManager()
+        let first = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let second = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        XCTAssertEqual(manager.ports(for: first).proxy, manager.ports(for: first).proxy)
+        XCTAssertNotEqual(manager.ports(for: first).proxy, manager.ports(for: second).proxy)
+        XCTAssertEqual(manager.ports(for: first).web - manager.ports(for: first).proxy, 5000)
+        XCTAssertTrue(manager.status(homeID: first).flowArchivePath.contains(first.uuidString.lowercased()))
+    }
+
     func testBrowserUseLocalTestingModeEnvironmentHelper() {
         var environment = ["BROWSER_USE_SECURITY_MODE": "existing", "OTHER": "1"]
 

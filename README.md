@@ -30,6 +30,30 @@ Temporary homes are not deleted immediately. Multihome shows what will be remove
 
 ## CLI
 
+### Bundled MITM proxy
+
+Multihome can ship the official signed mitmproxy macOS bundle and automatically
+start `mitmweb` when a proxy-enabled Codex Desktop or CLI session launches:
+
+```sh
+homeport configure --mitm-proxy on --mitm-proxy-url http://127.0.0.1:8080
+homeport proxy status
+homeport proxy stop
+```
+
+The proxy binds only to loopback. Its generated CA, private key, PID, and log are
+stored under Multihome's Application Support directory, never in the app bundle.
+Each home gets stable proxy/web ports and its own session directory under
+`mitmproxy/homes/<home-id>/`, including `flows.mitm`, `mitmweb.log`, and its PID.
+The trusted CA remains shared at the channel's `mitmproxy/` root. An agent can
+inspect a home's archive with the bundled `mitmdump` when explicitly asked. Flow archives
+may contain authorization headers, cookies, prompts, and response bodies; treat
+them as sensitive and do not attach or share them without reviewing their contents.
+Set `--mitm-proxy-ca` to use a different PEM CA bundle. Release builders run
+`scripts/prepare-mitmproxy-runtime.sh --all`; local builds prepare only the host
+architecture. Trusting a generated interception CA in the macOS keychain remains
+an explicit user action.
+
 ```sh
 swift run homeport doctor
 swift run homeport launch main --target desktop

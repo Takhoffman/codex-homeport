@@ -1,0 +1,41 @@
+.websocket.homeport-readable-websocket pre {
+    box-sizing: border-box;
+    max-height: 22rem;
+    overflow: auto;
+    padding: 0.65rem 0.8rem;
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.4;
+    cursor: zoom-in;
+}
+
+.websocket.homeport-readable-websocket pre.homeport-expanded {
+    max-height: none;
+    cursor: zoom-out;
+}
+
+.homeport-websocket-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.75rem;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid #c8d3df;
+    border-radius: 4px;
+    background: #f5f8fb;
+}
+
+.homeport-websocket-toolbar button {
+    padding: 0.3rem 0.6rem;
+    border: 1px solid #9aabba;
+    border-radius: 4px;
+    background: white;
+    color: #245b87;
+    font: inherit;
+}
+
+.homeport-websocket-toolbar .homeport-hint {
+    color: #677784;
+    font-size: 0.85em;
+}

@@ -423,6 +423,8 @@ public struct LaunchedInstance: Codable, Identifiable, Equatable, Sendable {
     public var closedAt: Date?
     public var status: InstanceStatus
     public var cleanupReviewRequired: Bool
+    public var usedShim: Bool?
+    public var usedProxy: Bool?
 
     public init(
         id: UUID = UUID(),
@@ -437,7 +439,9 @@ public struct LaunchedInstance: Codable, Identifiable, Equatable, Sendable {
         launchedAt: Date = Date(),
         closedAt: Date? = nil,
         status: InstanceStatus = .running,
-        cleanupReviewRequired: Bool = false
+        cleanupReviewRequired: Bool = false,
+        usedShim: Bool? = nil,
+        usedProxy: Bool? = nil
     ) {
         self.id = id
         self.homeID = homeID
@@ -452,6 +456,8 @@ public struct LaunchedInstance: Codable, Identifiable, Equatable, Sendable {
         self.closedAt = closedAt
         self.status = status
         self.cleanupReviewRequired = cleanupReviewRequired
+        self.usedShim = usedShim
+        self.usedProxy = usedProxy
     }
 }
 
@@ -535,6 +541,9 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
     public var allowForbiddenComputerUseTargetsByDefault: Bool
     public var browserUseLocalTestingMode: Bool
     public var desktopAppDevFlavor: Bool
+    public var mitmProxyEnabled: Bool
+    public var mitmProxyURL: String
+    public var mitmProxyCACertificatePath: String
     public var autoUpdateChecksEnabled: Bool
     public var autoInstallUpdates: Bool
     public var updateCheckInterval: UpdateCheckInterval
@@ -555,6 +564,9 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         allowForbiddenComputerUseTargetsByDefault: Bool = true,
         browserUseLocalTestingMode: Bool = true,
         desktopAppDevFlavor: Bool = true,
+        mitmProxyEnabled: Bool = false,
+        mitmProxyURL: String = "http://127.0.0.1:8080",
+        mitmProxyCACertificatePath: String = "",
         autoUpdateChecksEnabled: Bool = true,
         autoInstallUpdates: Bool = false,
         updateCheckInterval: UpdateCheckInterval = .daily,
@@ -574,6 +586,9 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         self.allowForbiddenComputerUseTargetsByDefault = allowForbiddenComputerUseTargetsByDefault
         self.browserUseLocalTestingMode = browserUseLocalTestingMode
         self.desktopAppDevFlavor = desktopAppDevFlavor
+        self.mitmProxyEnabled = mitmProxyEnabled
+        self.mitmProxyURL = mitmProxyURL
+        self.mitmProxyCACertificatePath = mitmProxyCACertificatePath
         self.autoUpdateChecksEnabled = autoUpdateChecksEnabled
         self.autoInstallUpdates = autoInstallUpdates
         self.updateCheckInterval = updateCheckInterval
@@ -595,6 +610,9 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         case allowForbiddenComputerUseTargetsByDefault
         case browserUseLocalTestingMode
         case desktopAppDevFlavor
+        case mitmProxyEnabled
+        case mitmProxyURL
+        case mitmProxyCACertificatePath
         case autoUpdateChecksEnabled
         case autoInstallUpdates
         case updateCheckInterval
@@ -618,6 +636,9 @@ public struct HomeportPreferences: Codable, Equatable, Sendable {
         self.allowForbiddenComputerUseTargetsByDefault = try container.decodeIfPresent(Bool.self, forKey: .allowForbiddenComputerUseTargetsByDefault) ?? true
         self.browserUseLocalTestingMode = try container.decodeIfPresent(Bool.self, forKey: .browserUseLocalTestingMode) ?? true
         self.desktopAppDevFlavor = try container.decodeIfPresent(Bool.self, forKey: .desktopAppDevFlavor) ?? true
+        self.mitmProxyEnabled = try container.decodeIfPresent(Bool.self, forKey: .mitmProxyEnabled) ?? false
+        self.mitmProxyURL = try container.decodeIfPresent(String.self, forKey: .mitmProxyURL) ?? "http://127.0.0.1:8080"
+        self.mitmProxyCACertificatePath = try container.decodeIfPresent(String.self, forKey: .mitmProxyCACertificatePath) ?? ""
         self.autoUpdateChecksEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoUpdateChecksEnabled) ?? true
         self.autoInstallUpdates = try container.decodeIfPresent(Bool.self, forKey: .autoInstallUpdates) ?? false
         self.updateCheckInterval = try container.decodeIfPresent(UpdateCheckInterval.self, forKey: .updateCheckInterval) ?? .daily

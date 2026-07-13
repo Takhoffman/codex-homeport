@@ -17,7 +17,9 @@ public struct Launcher {
         terminal: TerminalApp,
         appBundle: URL? = nil,
         browserUseLocalTestingMode: Bool = false,
-        desktopAppDevFlavor: Bool = false
+        desktopAppDevFlavor: Bool = false,
+        proxyURL: String? = nil,
+        proxyCACertificatePath: String? = nil
     ) throws -> Int32? {
         switch target {
         case .desktop:
@@ -25,14 +27,18 @@ public struct Launcher {
                 home: home,
                 appBundle: appBundle,
                 browserUseLocalTestingMode: browserUseLocalTestingMode,
-                desktopAppDevFlavor: desktopAppDevFlavor
+                desktopAppDevFlavor: desktopAppDevFlavor,
+                proxyURL: proxyURL,
+                proxyCACertificatePath: proxyCACertificatePath
             )
         case .terminal:
             return try launchTerminal(
                 home: home,
                 workspace: workspace,
                 terminal: terminal,
-                browserUseLocalTestingMode: browserUseLocalTestingMode
+                browserUseLocalTestingMode: browserUseLocalTestingMode,
+                proxyURL: proxyURL,
+                proxyCACertificatePath: proxyCACertificatePath
             )
         }
     }
@@ -41,7 +47,9 @@ public struct Launcher {
         home: CodexHome,
         appBundle: URL?,
         browserUseLocalTestingMode: Bool,
-        desktopAppDevFlavor: Bool
+        desktopAppDevFlavor: Bool,
+        proxyURL: String?,
+        proxyCACertificatePath: String?
     ) throws -> Int32? {
         let homeURL = URL(fileURLWithPath: home.homePath)
         guard fileManager.fileExists(atPath: homeURL.path) else {
@@ -65,6 +73,7 @@ public struct Launcher {
         if let profilePath = home.profilePath {
             arguments = ["--user-data-dir=\(profilePath)"]
         }
+        if let proxyURL { arguments.append("--proxy-server=\(proxyURL)") }
         if appBundle != nil, let profilePath = home.profilePath {
             let shimProfilePath = "\(profilePath)-shim"
             try fileManager.createDirectory(at: URL(fileURLWithPath: shimProfilePath), withIntermediateDirectories: true)
@@ -75,13 +84,16 @@ public struct Launcher {
                 bundle: bundle,
                 home: home,
                 profilePath: shimProfilePath,
-                browserUseLocalTestingMode: browserUseLocalTestingMode
+                browserUseLocalTestingMode: browserUseLocalTestingMode,
+                proxyURL: proxyURL,
+                proxyCACertificatePath: proxyCACertificatePath
             )
         }
         var environment = ProcessInfo.processInfo.environment
         environment["CODEX_HOME"] = home.homePath
         applyBrowserUseLocalTestingMode(browserUseLocalTestingMode, to: &environment)
         applyDesktopAppDevFlavor(desktopAppDevFlavor, to: &environment)
+        applyProxy(proxyURL: proxyURL, caCertificatePath: proxyCACertificatePath, to: &environment)
 
         let app = try NSWorkspace.shared.launchApplication(
             at: bundle,
@@ -99,14 +111,23 @@ public struct Launcher {
         bundle: URL,
         home: CodexHome,
         profilePath: String,
-        browserUseLocalTestingMode: Bool
+        browserUseLocalTestingMode: Bool,
+        proxyURL: String?,
+        proxyCACertificatePath: String?
     ) throws -> Int32? {
         var arguments = ["-n", "-F", bundle.path, "--env", "CODEX_HOME=\(home.homePath)"]
         arguments += shimBrowserCompatibleDesktopEnvironmentArguments(environment: ProcessInfo.processInfo.environment)
         if browserUseLocalTestingMode {
             arguments += ["--env", "BROWSER_USE_SECURITY_MODE=disabled-for-local-testing"]
         }
+        if let proxyURL {
+            arguments += ["--env", "HTTPS_PROXY=\(proxyURL)", "--env", "HTTP_PROXY=\(proxyURL)"]
+        }
+        if let proxyCACertificatePath, !proxyCACertificatePath.isEmpty {
+            arguments += ["--env", "SSL_CERT_FILE=\(proxyCACertificatePath)", "--env", "NODE_EXTRA_CA_CERTS=\(proxyCACertificatePath)"]
+        }
         arguments += ["--args", "--user-data-dir=\(profilePath)"]
+        if let proxyURL { arguments.append("--proxy-server=\(proxyURL)") }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
@@ -188,12 +209,16 @@ public struct Launcher {
         home: CodexHome,
         workspace: String?,
         terminal: TerminalApp,
-        browserUseLocalTestingMode: Bool
+        browserUseLocalTestingMode: Bool,
+        proxyURL: String?,
+        proxyCACertificatePath: String?
     ) throws -> Int32? {
         let command = terminalShellCommand(
             home: home,
             workspace: workspace,
-            browserUseLocalTestingMode: browserUseLocalTestingMode
+            browserUseLocalTestingMode: browserUseLocalTestingMode,
+            proxyURL: proxyURL,
+            proxyCACertificatePath: proxyCACertificatePath
         )
         let script = terminalAppleScript(command: command, terminal: terminal)
         let process = Process()
@@ -210,14 +235,17 @@ public struct Launcher {
     public func terminalShellCommand(
         home: CodexHome,
         workspace: String?,
-        browserUseLocalTestingMode: Bool = false
+        browserUseLocalTestingMode: Bool = false,
+        proxyURL: String? = nil,
+        proxyCACertificatePath: String? = nil
     ) -> String {
         let workspacePath = workspace?.isEmpty == false ? workspace! : fileManager.currentDirectoryPath
         let browserMode = browserUseLocalTestingMode
             ? " BROWSER_USE_SECURITY_MODE=disabled-for-local-testing"
             : ""
+        let proxyEnvironment = proxyShellEnvironment(proxyURL: proxyURL, caCertificatePath: proxyCACertificatePath)
         return """
-        cd \(shellQuote(workspacePath)); CODEX_HOME=\(shellQuote(home.homePath))\(browserMode) codex
+        cd \(shellQuote(workspacePath)); CODEX_HOME=\(shellQuote(home.homePath))\(browserMode)\(proxyEnvironment) codex
         """
     }
 
@@ -243,6 +271,38 @@ public struct Launcher {
             """
         }
     }
+}
+
+func applyProxy(proxyURL: String?, caCertificatePath: String?, to environment: inout [String: String]) {
+    guard let proxyURL, !proxyURL.isEmpty else { return }
+    environment["HTTPS_PROXY"] = proxyURL
+    environment["HTTP_PROXY"] = proxyURL
+    environment["https_proxy"] = proxyURL
+    environment["http_proxy"] = proxyURL
+    environment["NO_PROXY"] = mergedNoProxy(environment["NO_PROXY"])
+    environment["no_proxy"] = mergedNoProxy(environment["no_proxy"])
+    if let path = caCertificatePath, !path.isEmpty {
+        environment["SSL_CERT_FILE"] = path
+        environment["NODE_EXTRA_CA_CERTS"] = path
+    }
+}
+
+private func mergedNoProxy(_ existing: String?) -> String {
+    var entries = (existing ?? "").split(separator: ",").map(String.init)
+    for host in ["127.0.0.1", "localhost", "::1"] where !entries.contains(host) {
+        entries.append(host)
+    }
+    return entries.joined(separator: ",")
+}
+
+func proxyShellEnvironment(proxyURL: String?, caCertificatePath: String?) -> String {
+    guard let proxyURL, !proxyURL.isEmpty else { return "" }
+    var result = " HTTPS_PROXY=\(shellQuote(proxyURL)) HTTP_PROXY=\(shellQuote(proxyURL)) https_proxy=\(shellQuote(proxyURL)) http_proxy=\(shellQuote(proxyURL))"
+    result += " NO_PROXY='127.0.0.1,localhost,::1' no_proxy='127.0.0.1,localhost,::1'"
+    if let path = caCertificatePath, !path.isEmpty {
+        result += " SSL_CERT_FILE=\(shellQuote(path)) NODE_EXTRA_CA_CERTS=\(shellQuote(path))"
+    }
+    return result
 }
 
 func applyBrowserUseLocalTestingMode(_ isEnabled: Bool, to environment: inout [String: String]) {

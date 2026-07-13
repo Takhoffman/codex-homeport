@@ -81,6 +81,8 @@ func run(_ arguments: [String]) throws {
         try autostart(Array(arguments.dropFirst()))
     case "configure":
         try configure(Array(arguments.dropFirst()))
+    case "proxy":
+        try proxy(Array(arguments.dropFirst()))
     case "onboard":
         try onboard(Array(arguments.dropFirst()))
     case "uninstall":
@@ -361,6 +363,7 @@ func install(_ arguments: [String]) throws {
 
     print("Installing \(channel.appName) \(AppVersion.version) from \(repo.path)")
     try runProcess("/bin/sh", [repo.appendingPathComponent("scripts/prepare-shim-runtime.sh").path])
+    try runProcess("/bin/sh", [repo.appendingPathComponent("scripts/prepare-mitmproxy-runtime.sh").path])
     try runProcess("swift", ["build", "--package-path", repo.path, "-c", "release", "--product", "homeport"])
     try FileManager.default.createDirectory(at: installDirectory, withIntermediateDirectories: true)
 
@@ -626,6 +629,27 @@ func configure(_ arguments: [String]) throws {
         print("Desktop app dev flavor: \(isEnabled)")
     }
 
+    if let proxyEnabled = option(arguments, "--mitm-proxy") {
+        var state = try service.loadState()
+        state.preferences.mitmProxyEnabled = try strictBoolValue(proxyEnabled, optionName: "--mitm-proxy")
+        try service.saveState(state)
+        print("MITM proxy enabled: \(state.preferences.mitmProxyEnabled)")
+    }
+
+    if let proxyURL = option(arguments, "--mitm-proxy-url") {
+        var state = try service.loadState()
+        state.preferences.mitmProxyURL = proxyURL
+        try service.saveState(state)
+        print("MITM proxy URL: \(proxyURL)")
+    }
+
+    if let caPath = option(arguments, "--mitm-proxy-ca") {
+        var state = try service.loadState()
+        state.preferences.mitmProxyCACertificatePath = caPath
+        try service.saveState(state)
+        print("MITM proxy CA certificate: \(caPath.isEmpty ? "not set" : caPath)")
+    }
+
     if let updateChecks = option(arguments, "--update-checks") {
         var state = try service.loadState()
         state.preferences.autoUpdateChecksEnabled = try strictBoolValue(updateChecks, optionName: "--update-checks")
@@ -683,10 +707,37 @@ func configure(_ arguments: [String]) throws {
         print("Current macOS Computer Use target default: \(computerUseDefault)")
         print("Browser Use local testing mode: \(state.preferences.browserUseLocalTestingMode)")
         print("Desktop app dev flavor: \(state.preferences.desktopAppDevFlavor)")
+        print("MITM proxy enabled: \(state.preferences.mitmProxyEnabled)")
+        print("MITM proxy URL: \(state.preferences.mitmProxyURL)")
+        print("MITM proxy CA certificate: \(state.preferences.mitmProxyCACertificatePath.isEmpty ? "not set" : state.preferences.mitmProxyCACertificatePath)")
         print("Update checks enabled: \(state.preferences.autoUpdateChecksEnabled)")
         print("Update interval: \(state.preferences.updateCheckInterval.rawValue)")
         print("Auto-install updates: \(state.preferences.autoInstallUpdates)")
         try autostart(["status", "--channel", selectedChannel.rawValue])
+    }
+}
+
+func proxy(_ arguments: [String]) throws {
+    switch arguments.first ?? "status" {
+    case "start":
+        let status = try service.startMitmProxy()
+        print("Bundled mitmweb started (pid \(status.pid.map(String.init) ?? "unknown")).")
+        print("CA certificate: \(status.caCertificatePath)")
+        print("Log: \(status.logPath)")
+        print("Captured flows: \(status.flowArchivePath)")
+    case "stop":
+        try service.stopMitmProxy()
+        print("Bundled mitmweb stopped.")
+    case "status":
+        let status = service.mitmProxyStatus()
+        print("Bundled mitmweb: \(status.isRunning ? "running" : "stopped")")
+        if let pid = status.pid { print("pid: \(pid)") }
+        print("Executable: \(status.executablePath ?? "missing")")
+        print("CA certificate: \(status.caCertificatePath)")
+        print("Log: \(status.logPath)")
+        print("Captured flows: \(status.flowArchivePath)")
+    default:
+        throw HomeportError.unsupportedCommand("proxy \(arguments.first ?? "")")
     }
 }
 
@@ -1542,6 +1593,9 @@ Options:
                                         Set Apple's global Computer Use target default.
   --browser-use-local-testing on|off    Launch Codex with BROWSER_USE_SECURITY_MODE=disabled-for-local-testing.
   --desktop-app-dev-flavor on|off       Launch Codex Desktop with BUILD_FLAVOR=dev.
+  --mitm-proxy on|off                   Route launched Desktop/CLI traffic through a proxy.
+  --mitm-proxy-url URL                  Proxy URL (default http://127.0.0.1:8080).
+  --mitm-proxy-ca PATH                  Optional PEM CA bundle for the launched process.
   --update-checks on|off                Enable proactive npm update checks.
   --update-interval daily|weekly        How often the app checks for updates.
   --auto-install-updates on|off         Install available updates without prompting.
