@@ -1008,6 +1008,7 @@ def _patch_codex_app_bundle(codex_app: Path, *, quit_first: bool) -> int:
     if npx is None:
         print("npx is required to patch the Electron asar bundle.", file=sys.stderr)
         return 1
+    npx_environment = _command_environment(npx)
 
     backup_dir.mkdir(parents=True, exist_ok=True)
     if not backup.exists():
@@ -1030,12 +1031,20 @@ def _patch_codex_app_bundle(codex_app: Path, *, quit_first: bool) -> int:
         shutil.rmtree(workdir)
     workdir.mkdir(parents=True)
 
-    subprocess.run([npx, "--yes", "asar", "extract", str(app_asar), str(workdir)], check=True)
+    subprocess.run(
+        [npx, "--yes", "asar", "extract", str(app_asar), str(workdir)],
+        check=True,
+        env=npx_environment,
+    )
     changed = _patch_codex_desktop_bundles(workdir)
     if changed is None:
         return 1
     if changed:
-        subprocess.run([npx, "--yes", "asar", "pack", str(workdir), str(app_asar)], check=True)
+        subprocess.run(
+            [npx, "--yes", "asar", "pack", str(workdir), str(app_asar)],
+            check=True,
+            env=npx_environment,
+        )
         _update_app_asar_integrity(app_asar, info_plist)
         _resign_codex_app(codex_app)
     return 0
@@ -1083,6 +1092,15 @@ def _command_path(command: str) -> str | None:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return None
+
+
+def _command_environment(executable: str) -> dict[str, str]:
+    environment = os.environ.copy()
+    executable_directory = str(Path(executable).parent)
+    path_entries = environment.get("PATH", "").split(os.pathsep)
+    if executable_directory not in path_entries:
+        environment["PATH"] = os.pathsep.join([executable_directory, *path_entries])
+    return environment
 
 
 def _app_asar_header_hash(path: Path) -> str:

@@ -34,6 +34,12 @@ class CommandPathTests(unittest.TestCase):
         ):
             self.assertIsNone(cli._command_path("npx"))
 
+    def test_command_environment_exposes_sibling_node_to_npx(self) -> None:
+        with patch.dict(cli.os.environ, {"PATH": "/usr/bin:/bin"}, clear=True):
+            environment = cli._command_environment("/opt/homebrew/bin/npx")
+
+        self.assertEqual(environment["PATH"], "/opt/homebrew/bin:/usr/bin:/bin")
+
 
 if __name__ == "__main__":
     unittest.main()
