@@ -146,6 +146,22 @@ test("onboard installs tray app before autostart by default", () => withTempEnv(
   assert.ok(fs.existsSync(path.join(appDir, "codex-multihome-tray.ps1")));
 }));
 
+test("autostart uses the per-user Startup folder without administrator access", () => withTempEnv((root) => {
+  delete process.env.CODEX_MULTIHOME_TEST_SKIP_SCHTASKS;
+  const app = new HomeportWin(path.resolve(__dirname, ".."));
+  const appDir = path.join(root, "AutostartApp");
+  const startupScript = path.join(root, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "Codex Multihome.vbs");
+
+  app.run(["install", "--prefix", path.join(root, "bin"), "--with-app", "--app-dir", appDir]);
+  app.run(["autostart", "enable", "--app-dir", appDir]);
+
+  assert.ok(fs.existsSync(startupScript));
+  assert.match(fs.readFileSync(startupScript, "utf8"), /AutostartApp/);
+
+  app.run(["autostart", "disable"]);
+  assert.equal(fs.existsSync(startupScript), false);
+}));
+
 test("dev channel uses separate state, homes, and tray app defaults", () => withTempEnv((root) => {
   const app = new HomeportWin(path.resolve(__dirname, ".."));
 
@@ -275,7 +291,8 @@ test("version 1 state migrates without renaming the legacy state file", () => wi
     version: 1,
     homes: [{ id: "legacy", name: "Legacy", slug: "legacy", kind: "cleanRoom", homePath: customPath }],
     instances: [],
-    pinnedHomeIDs: []
+    pinnedHomeIDs: [],
+    preferences: { clonePolicies: { config: "skip" } }
   }));
 
   const state = new HomeportWin(path.resolve(__dirname, "..")).state();
@@ -283,6 +300,9 @@ test("version 1 state migrates without renaming the legacy state file", () => wi
   assert.equal(state.homes.find((item) => item.id === "legacy").usesCustomPath, true);
   assert.ok(state.homes.some((item) => item.kind === "main"));
   assert.equal(path.basename(paths.stateFile), "homeport.json");
+  assert.equal(state.preferences.clonePolicies.config, "skip");
+  assert.equal(state.preferences.clonePolicies.instructions, "copy");
+  assert.equal(state.preferences.clonePolicies.commands, "copy");
 }));
 
 test("new environment names override legacy channel names", () => withTempEnv((root) => {

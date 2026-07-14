@@ -162,7 +162,13 @@ class HomeportWin {
     state.homes ||= [];
     state.instances ||= [];
     state.pinnedHomeIDs ||= [];
-    state.preferences = { ...defaultPreferences(), ...(state.preferences || {}) };
+    const defaults = defaultPreferences();
+    const savedPreferences = state.preferences || {};
+    state.preferences = {
+      ...defaults,
+      ...savedPreferences,
+      clonePolicies: { ...defaults.clonePolicies, ...(savedPreferences.clonePolicies || {}) }
+    };
     state.updater ||= {};
     state.version = Math.max(Number(state.version) || 1, 2);
     if (!state.homes.some((home) => home.kind === "main")) {
@@ -680,16 +686,19 @@ class HomeportWin {
   autostart(args) {
     const action = args[0] || "status";
     const taskName = this.channel === "dev" ? "Codex Multihome Dev" : "Codex Multihome";
+    const startupDirectory = path.join(this.paths.appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
+    const startupScript = path.join(startupDirectory, `${taskName}.vbs`);
     if (environmentValue("CODEX_MULTIHOME_TEST_SKIP_SCHTASKS", "HOMEPORT_TEST_SKIP_SCHTASKS") === "1") {
       console.log(`Autostart (live): ${action === "status" ? "disabled" : `${action} skipped in tests`}`);
       return;
     }
     if (action === "status") {
-      const result = spawnSync("schtasks.exe", ["/Query", "/TN", taskName], { encoding: "utf8" });
-      console.log(`Autostart (live): ${result.status === 0 ? "enabled" : "disabled"}`);
+      console.log(`Autostart (live): ${fs.existsSync(startupScript) ? "enabled" : "disabled"}`);
       return;
     }
     if (action === "disable" || action === "off") {
+      fs.rmSync(startupScript, { force: true });
+      // Clean up scheduled tasks created by pre-release Windows builds.
       spawnSync("schtasks.exe", ["/Delete", "/TN", taskName, "/F"], { stdio: "ignore" });
       console.log("Autostart disabled.");
       return;
@@ -699,9 +708,14 @@ class HomeportWin {
       if (!fs.existsSync(app.launcher)) {
         throw new Error(`Codex Multihome tray app was not found at ${app.launcher}. Run ${COMMAND} install --with-app first.`);
       }
-      const command = `"${app.launcher}"`;
-      const result = spawnSync("schtasks.exe", ["/Create", "/SC", "ONLOGON", "/TN", taskName, "/TR", command, "/F"], { encoding: "utf8" });
-      if (result.status !== 0) throw new Error(result.stderr || result.stdout || "schtasks failed");
+      ensureDir(startupDirectory);
+      const escapedLauncher = app.launcher.replaceAll('"', '""');
+      const script = [
+        "Set shell = CreateObject(\"WScript.Shell\")",
+        `shell.Run Chr(34) & \"${escapedLauncher}\" & Chr(34), 0, False`,
+        ""
+      ].join("\r\n");
+      fs.writeFileSync(startupScript, script);
       console.log("Autostart enabled.");
       return;
     }
@@ -807,7 +821,7 @@ Home commands:
 
 Setup commands:
   install      Install the CLI shim, optionally the Windows tray app
-  autostart    Enable, disable, or show scheduled-task login autostart
+  autostart    Enable, disable, or show per-user login autostart
   uninstall    Remove installed app/autostart entries; extra removals are opt-in
 
 Examples:

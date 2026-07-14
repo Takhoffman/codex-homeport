@@ -12,7 +12,7 @@ Supported:
 - create, clone, rename, move, adopt, promote, review, and safe cleanup flows;
 - simultaneous terminal and Codex Desktop launches;
 - Windows Terminal with a `cmd.exe` fallback;
-- a WPF tray launcher and Scheduled Task login autostart;
+- a WPF tray launcher and non-admin, per-user Startup-folder autostart;
 - live/dev channels and legacy `homeport.json` state compatibility;
 - `CODEX_MULTIHOME_*` variables with legacy `HOMEPORT_*` fallbacks.
 
@@ -33,6 +33,7 @@ the supported Windows v1 contract is Codex.
 - State: `%APPDATA%\CodexMultihome\homeport.json`
 - Trash: `%APPDATA%\CodexMultihome\Trash`
 - Tray installation: `%LOCALAPPDATA%\CodexMultihome\App`
+- Autostart: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Codex Multihome.vbs`
 
 The legacy state filename is intentional. Existing Windows v0.7.3 state is
 migrated in memory without forcing users to reset their homes.
@@ -64,7 +65,7 @@ codex-multihome start --channel dev
 ```
 
 The dev channel uses `.codex-homes-dev`, `CodexMultihomeDev` application data,
-and a separate `Codex Multihome Dev` scheduled task.
+and a separate `Codex Multihome Dev.vbs` per-user Startup entry.
 
 ## Common commands
 
