@@ -28,7 +28,7 @@ if (mitmRuntime.error || mitmRuntime.status !== 0) {
   process.exit(mitmRuntime.status ?? 1);
 }
 
-const result = spawnSync("swift", ["build", "--package-path", root, "-c", "release", "--product", "homeport"], {
+const result = spawnSync("swift", ["build", "--package-path", root, "-c", "release", "--product", "codex-multihome"], {
   stdio: "inherit"
 });
 

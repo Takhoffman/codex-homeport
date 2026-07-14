@@ -8,7 +8,7 @@ let package = Package(
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "homeport", targets: ["homeport"]),
+        .executable(name: "codex-multihome", targets: ["CodexMultihomeCLI"]),
         .executable(name: "CodexMultihomeApp", targets: ["CodexMultihomeApp"]),
         .library(name: "HomeportCore", targets: ["HomeportCore"])
     ],
@@ -17,8 +17,9 @@ let package = Package(
             name: "HomeportCore"
         ),
         .executableTarget(
-            name: "homeport",
-            dependencies: ["HomeportCore"]
+            name: "CodexMultihomeCLI",
+            dependencies: ["HomeportCore"],
+            path: "Sources/CodexMultihomeCLI"
         ),
         .executableTarget(
             name: "CodexMultihomeApp",

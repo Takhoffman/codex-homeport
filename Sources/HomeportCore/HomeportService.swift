@@ -727,7 +727,7 @@ public final class HomeportService: @unchecked Sendable {
         npm install -g codex-multihome@latest
         package_root="$(npm root -g)/codex-multihome"
         test -f "$package_root/Package.swift"
-        homeport update --with-app --no-restart --repo "$package_root" --channel \(paths.channel.rawValue)
+        codex-multihome update --with-app --no-restart --repo "$package_root" --channel \(paths.channel.rawValue)
         """
         let shellCommand = "nohup /bin/zsh -lc \(shellQuote(command)) >> \(shellQuote(paths.updateLogFile.path)) 2>&1 &"
         let process = Process()

@@ -142,7 +142,7 @@ public struct Diagnostics {
                 "method": "initialize",
                 "params": [
                     "clientInfo": [
-                        "name": "homeport",
+                        "name": "codex-multihome",
                         "version": AppVersion.version
                     ],
                     "capabilities": [

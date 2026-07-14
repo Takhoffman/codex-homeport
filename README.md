@@ -36,9 +36,9 @@ Multihome can ship the official signed mitmproxy macOS bundle and automatically
 start `mitmweb` when a proxy-enabled Codex Desktop or CLI session launches:
 
 ```sh
-homeport configure --mitm-proxy on --mitm-proxy-url http://127.0.0.1:8080
-homeport proxy status
-homeport proxy stop
+codex-multihome configure --mitm-proxy on --mitm-proxy-url http://127.0.0.1:8080
+codex-multihome proxy status
+codex-multihome proxy stop
 ```
 
 The proxy binds only to loopback. Its generated CA, private key, PID, and log are
@@ -55,31 +55,31 @@ architecture. Trusting a generated interception CA in the macOS keychain remains
 an explicit user action.
 
 ```sh
-swift run homeport doctor
-swift run homeport launch main --target desktop
-swift run homeport launch main --target terminal
-swift run homeport launch temp --target terminal
-swift run homeport throwaway
-swift run homeport create --kind clean-room --name "Blank Slate"
-swift run homeport rename blank-slate --name "Scratch Lab"
-swift run homeport delete scratch-lab
-swift run homeport clone --preset working-setup --name "Test Home"
-swift run homeport clone --preset working-setup --name "Disposable Test Home" --temporary
-swift run homeport clone --name "Shared Skills" --source main --link-safe --include skills,plugins
-swift run homeport clone --name "Shared Auth" --source main --link-auth --include config,auth
-swift run homeport clone --name "Linked Config" --source main --include config,auth --link config
-swift run homeport clone --name "From Template" --source template-home --link-safe
-swift run homeport list
-swift run homeport review
-swift run homeport cleanup INSTANCE_UUID
-swift run homeport install --with-app
-swift run homeport update --with-app
-swift run homeport onboard
-swift run homeport uninstall
-swift run homeport clone --name "Skills Lab" --include config,skills,plugins --exclude auth,sessions
+swift run codex-multihome doctor
+swift run codex-multihome launch main --target desktop
+swift run codex-multihome launch main --target terminal
+swift run codex-multihome launch temp --target terminal
+swift run codex-multihome throwaway
+swift run codex-multihome create --kind clean-room --name "Blank Slate"
+swift run codex-multihome rename blank-slate --name "Scratch Lab"
+swift run codex-multihome delete scratch-lab
+swift run codex-multihome clone --preset working-setup --name "Test Home"
+swift run codex-multihome clone --preset working-setup --name "Disposable Test Home" --temporary
+swift run codex-multihome clone --name "Shared Skills" --source main --link-safe --include skills,plugins
+swift run codex-multihome clone --name "Shared Auth" --source main --link-auth --include config,auth
+swift run codex-multihome clone --name "Linked Config" --source main --include config,auth --link config
+swift run codex-multihome clone --name "From Template" --source template-home --link-safe
+swift run codex-multihome list
+swift run codex-multihome review
+swift run codex-multihome cleanup INSTANCE_UUID
+swift run codex-multihome install --with-app
+swift run codex-multihome update --with-app
+swift run codex-multihome onboard
+swift run codex-multihome uninstall
+swift run codex-multihome clone --name "Skills Lab" --include config,skills,plugins --exclude auth,sessions
 ```
 
-`homeport clone --source main|SLUG` chooses the clone source. `--link-safe`
+`codex-multihome clone --source main|SLUG` chooses the clone source. `--link-safe`
 symlinks safe customization categories only: config, skills, plugins, agents,
 prompts, rules, and profiles. `--link-auth` also symlinks selected `auth.json`.
 `--link LIST` symlinks specific linkable categories. Browser support, memories,
@@ -99,15 +99,15 @@ copy/link policies while marking the home for cleanup review.
 To run a dev menu bar app beside the live app:
 
 ```sh
-homeport install --with-app --channel dev
-homeport start --channel dev
-HOMEPORT_CHANNEL=dev swift run CodexMultihomeApp
+codex-multihome install --with-app --channel dev
+codex-multihome start --channel dev
+CODEX_MULTIHOME_CHANNEL=dev swift run CodexMultihomeApp
 ```
 
 The dev channel installs as `Codex Multihome Dev.app`, uses bundle ID
 `com.takhoffman.codex-multihome.dev`, embeds its dev channel in the app bundle,
 writes its own LaunchAgent, and keeps Multihome state and managed homes separate
-from live. Use `HOMEPORT_CHANNEL=dev` only for `swift run` development.
+from live. Use `CODEX_MULTIHOME_CHANNEL=dev` only for `swift run` development.
 
 The menu keeps pinned homes and recent launches close at hand:
 
@@ -151,23 +151,23 @@ for the CLI setup, limitations, and SDK caveats.
 ## Install And Update
 
 The recommended Mac install path is npm. The npm package builds the Swift CLI
-during install, exposes the `homeport` command, and keeps the source package in
+during install, exposes the `codex-multihome` command, and keeps the source package in
 npm's normal global package location.
 
 ```sh
 npm install -g codex-multihome
-homeport install --with-app
-homeport start
+codex-multihome install --with-app
+codex-multihome start
 ```
 
 To update:
 
 ```sh
 npm install -g codex-multihome@latest
-homeport update
+codex-multihome update
 ```
 
-When installed through npm, `homeport update` rebuilds and reinstalls the app
+When installed through npm, `codex-multihome update` rebuilds and reinstalls the app
 from the npm package. Use npm itself to fetch new published versions.
 
 The app's Settings tab includes the auto-updater. When the app is running, it
@@ -177,21 +177,21 @@ installs are enabled. Updates run the same safe path the app shows:
 
 ```sh
 npm install -g codex-multihome@latest
-homeport update --with-app
+codex-multihome update --with-app
 ```
 
 If you already have the source repo checked out, you can still install directly
 from the current checkout:
 
 ```sh
-swift run homeport install --with-app
-homeport start
+swift run codex-multihome install --with-app
+codex-multihome start
 ```
 
 To install the CLI:
 
 ```sh
-swift run homeport install
+swift run codex-multihome install
 ```
 
 The older git-backed install script remains useful for source development:
@@ -202,12 +202,12 @@ The older git-backed install script remains useful for source development:
 
 That script keeps a checkout at
 `~/Library/Application Support/CodexMultihome/Source`, installs the CLI to
-`~/bin/homeport`, installs the app to `~/Applications/Codex Multihome.app`,
+`~/bin/codex-multihome`, installs the app to `~/Applications/Codex Multihome.app`,
 enables autostart, and starts the app.
 
-If the app is already installed, `homeport update` reinstalls it automatically;
+If the app is already installed, `codex-multihome update` reinstalls it automatically;
 if the menu bar app is running, it restarts it after the update so macOS uses
-the new binary. Use `homeport update --no-restart` when you want to relaunch
+the new binary. Use `codex-multihome update --no-restart` when you want to relaunch
 manually.
 
 The versioning strategy is simple semantic versions:
@@ -238,50 +238,50 @@ release. Users update with `npm install -g codex-multihome@latest`.
 Autostart is managed by a user LaunchAgent:
 
 ```sh
-homeport autostart enable
-homeport autostart status
-homeport autostart disable
+codex-multihome autostart enable
+codex-multihome autostart status
+codex-multihome autostart disable
 ```
 
 Configuration can be changed without reinstalling:
 
 ```sh
-homeport configure --terminal iTerm
-homeport configure --channel dev --show
-homeport configure --workspace "$PWD"
-homeport configure --launch-target terminal
-homeport configure --clone-preset config-only
-homeport configure --clone-include config,skills,plugins
-homeport configure --clone-exclude auth,sessions
-homeport configure --temporary on
-homeport configure --allow-forbidden-computer-use-targets on
-homeport configure --browser-use-local-testing on
-homeport configure --desktop-app-dev-flavor on
-homeport configure --browser-use-local-testing on
-homeport configure --update-checks on
-homeport configure --update-interval weekly
-homeport configure --auto-install-updates off
-homeport configure --autostart on
-homeport configure --show
-homeport configure --reset
+codex-multihome configure --terminal iTerm
+codex-multihome configure --channel dev --show
+codex-multihome configure --workspace "$PWD"
+codex-multihome configure --launch-target terminal
+codex-multihome configure --clone-preset config-only
+codex-multihome configure --clone-include config,skills,plugins
+codex-multihome configure --clone-exclude auth,sessions
+codex-multihome configure --temporary on
+codex-multihome configure --allow-forbidden-computer-use-targets on
+codex-multihome configure --browser-use-local-testing on
+codex-multihome configure --desktop-app-dev-flavor on
+codex-multihome configure --browser-use-local-testing on
+codex-multihome configure --update-checks on
+codex-multihome configure --update-interval weekly
+codex-multihome configure --auto-install-updates off
+codex-multihome configure --autostart on
+codex-multihome configure --show
+codex-multihome configure --reset
 ```
 
 Onboarding applies Apple's global Computer Use target default so desktop
 automation can reach apps that macOS otherwise marks as forbidden. Turn it off
-with `homeport configure --allow-forbidden-computer-use-targets off`, or use the
+with `codex-multihome configure --allow-forbidden-computer-use-targets off`, or use the
 Settings tab in the menu bar app.
 
 To uninstall the app and autostart entry while keeping Codex homes and Multihome state:
 
 ```sh
-homeport uninstall
+codex-multihome uninstall
 ```
 
 More complete removal is opt-in:
 
 ```sh
-homeport uninstall --remove-cli --remove-state
-homeport uninstall --remove-managed-homes
+codex-multihome uninstall --remove-cli --remove-state
+codex-multihome uninstall --remove-managed-homes
 ```
 
 `--remove-managed-homes` moves `~/.codex-homes` to Trash, so use it only when you really want to remove cloned or temporary Codex homes. Your main `~/.codex` is never removed by Multihome.
@@ -295,7 +295,7 @@ homeport uninstall --remove-managed-homes
 
 ## Diagnostics
 
-`homeport doctor` checks:
+`codex-multihome doctor` checks:
 
 - whether `launchctl getenv CODEX_HOME` is set
 - whether a Codex Desktop app is installed (identified by bundle ID, so app renames are supported)
@@ -306,7 +306,7 @@ homeport uninstall --remove-managed-homes
 Use:
 
 ```sh
-swift run homeport doctor --repair
+swift run codex-multihome doctor --repair
 ```
 
 to clear a GUI-level `CODEX_HOME` override.

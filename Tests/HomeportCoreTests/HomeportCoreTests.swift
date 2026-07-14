@@ -1345,8 +1345,9 @@ final class HomeportCoreTests: XCTestCase {
     }
 
     func testChannelReadsEnvironmentBeforeBundleDefault() {
+        XCTAssertEqual(HomeportChannel.current(environment: ["CODEX_MULTIHOME_CHANNEL": "dev"], bundle: .main), .dev)
+        XCTAssertEqual(HomeportChannel.current(environment: ["CODEX_MULTIHOME_CHANNEL": "live"], bundle: .main), .live)
         XCTAssertEqual(HomeportChannel.current(environment: ["HOMEPORT_CHANNEL": "dev"], bundle: .main), .dev)
-        XCTAssertEqual(HomeportChannel.current(environment: ["HOMEPORT_CHANNEL": "live"], bundle: .main), .live)
     }
 
     func testCodexDesktopAppDiscoveryUsesBundleIdentityAndExecutableMetadata() throws {

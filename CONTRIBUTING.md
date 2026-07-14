@@ -14,14 +14,14 @@ Run checks:
 
 ```sh
 swift test
-swift run homeport --help
-swift run homeport doctor
+swift run codex-multihome --help
+swift run codex-multihome doctor
 ```
 
 Build the menu bar app:
 
 ```sh
-swift run homeport install --with-app --prefix /tmp/homeport-bin --app-dir /tmp
+swift run codex-multihome install --with-app --prefix /tmp/codex-multihome-bin --app-dir /tmp
 ```
 
 ## Safety

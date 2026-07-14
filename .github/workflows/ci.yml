@@ -19,8 +19,8 @@ jobs:
       - name: Test installer runtime probes
         run: npm run test:install
       - name: Build CLI
-        run: swift build --product homeport
+        run: swift build --product codex-multihome
       - name: Check help output
-        run: .build/debug/homeport --help
+        run: .build/debug/codex-multihome --help
       - name: Check npm package
         run: npm pack --dry-run

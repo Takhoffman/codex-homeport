@@ -47,7 +47,8 @@ public enum HomeportChannel: String, Codable, CaseIterable, Sendable {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         bundle: Bundle = .main
     ) -> HomeportChannel {
-        if let raw = environment["HOMEPORT_CHANNEL"], let channel = HomeportChannel(rawValue: raw) {
+        if let raw = environment["CODEX_MULTIHOME_CHANNEL"] ?? environment["HOMEPORT_CHANNEL"],
+           let channel = HomeportChannel(rawValue: raw) {
             return channel
         }
         if let raw = bundle.object(forInfoDictionaryKey: "HomeportChannel") as? String,

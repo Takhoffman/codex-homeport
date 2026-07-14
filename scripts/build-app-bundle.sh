@@ -3,4 +3,4 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 "$ROOT/scripts/prepare-mitmproxy-runtime.sh"
-swift run --package-path "$ROOT" homeport install --with-app --repo "$ROOT"
+swift run --package-path "$ROOT" codex-multihome install --with-app --repo "$ROOT"

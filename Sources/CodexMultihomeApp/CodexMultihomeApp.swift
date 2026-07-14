@@ -1633,7 +1633,7 @@ struct ShimAppBundleStatus {
         if !destinationExists { return "First routed App launch will build this automatically." }
         if stale { return "Repair Shim App will rebuild from the current Codex app." }
         if !patched { return "The copied app is missing codex-shim's ASAR patch." }
-        return "Homeport opens the copy in Browser-compatible dev mode so in-app Browser sockets do not require copied-app peer signing."
+        return "Codex Multihome opens the copy in Browser-compatible dev mode so in-app Browser sockets do not require copied-app peer signing."
     }
 
     var stateSymbol: String {
@@ -3737,7 +3737,7 @@ struct AutoUpdaterCard: View {
             ))
             .disabled(!model.state.preferences.autoUpdateChecksEnabled)
 
-            Text("Manual path: npm install -g codex-multihome@latest && homeport update --with-app")
+            Text("Manual path: npm install -g codex-multihome@latest && codex-multihome update --with-app")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)

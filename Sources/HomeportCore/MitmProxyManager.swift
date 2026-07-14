@@ -162,7 +162,8 @@ public struct MitmProxyManager {
     }
 
     private func bundledExecutable() -> URL? {
-        if let override = ProcessInfo.processInfo.environment["HOMEPORT_MITMPROXY_PATH"], !override.isEmpty {
+        if let override = ProcessInfo.processInfo.environment["CODEX_MULTIHOME_MITMPROXY_PATH"]
+            ?? ProcessInfo.processInfo.environment["HOMEPORT_MITMPROXY_PATH"], !override.isEmpty {
             let url = URL(fileURLWithPath: override)
             return fileManager.isExecutableFile(atPath: url.path) ? url : nil
         }

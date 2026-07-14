@@ -5,7 +5,7 @@ const { existsSync } = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const binary = path.join(root, ".build", "release", "homeport");
+const binary = path.join(root, ".build", "release", "codex-multihome");
 const args = process.argv.slice(2);
 const command = args[0];
 
@@ -30,7 +30,7 @@ function withPackageRoot(values) {
 }
 
 if (!existsSync(binary)) {
-  const build = spawnSync("swift", ["build", "--package-path", root, "-c", "release", "--product", "homeport"], {
+  const build = spawnSync("swift", ["build", "--package-path", root, "-c", "release", "--product", "codex-multihome"], {
     stdio: "inherit"
   });
   if (build.error) {

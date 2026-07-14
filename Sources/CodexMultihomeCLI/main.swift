@@ -6,7 +6,7 @@ let cliChannel: HomeportChannel = {
     do {
         return try channel(from: arguments)
     } catch {
-        fputs("homeport: \(error.localizedDescription)\n", stderr)
+        fputs("codex-multihome: \(error.localizedDescription)\n", stderr)
         exit(1)
     }
 }()
@@ -15,7 +15,7 @@ let service = HomeportService(paths: HomeportPaths(channel: cliChannel))
 do {
     try run(arguments)
 } catch {
-    fputs("homeport: \(error.localizedDescription)\n", stderr)
+    fputs("codex-multihome: \(error.localizedDescription)\n", stderr)
     exit(1)
 }
 
@@ -320,7 +320,7 @@ func review() throws {
         if let profile = instance.profilePath {
             print("  profile: \(profile)")
         }
-        print("  actions: homeport cleanup \(instance.id.uuidString) | homeport promote \(instance.id.uuidString)")
+        print("  actions: codex-multihome cleanup \(instance.id.uuidString) | codex-multihome promote \(instance.id.uuidString)")
     }
 }
 
@@ -364,17 +364,23 @@ func install(_ arguments: [String]) throws {
     print("Installing \(channel.appName) \(AppVersion.version) from \(repo.path)")
     try runProcess("/bin/sh", [repo.appendingPathComponent("scripts/prepare-shim-runtime.sh").path])
     try runProcess("/bin/sh", [repo.appendingPathComponent("scripts/prepare-mitmproxy-runtime.sh").path])
-    try runProcess("swift", ["build", "--package-path", repo.path, "-c", "release", "--product", "homeport"])
+    try runProcess("swift", ["build", "--package-path", repo.path, "-c", "release", "--product", "codex-multihome"])
     try FileManager.default.createDirectory(at: installDirectory, withIntermediateDirectories: true)
 
-    let builtCLI = repo.appendingPathComponent(".build/release/homeport")
-    let installedCLI = installDirectory.appendingPathComponent("homeport")
+    let builtCLI = repo.appendingPathComponent(".build/release/codex-multihome")
+    let installedCLI = installDirectory.appendingPathComponent("codex-multihome")
     if FileManager.default.fileExists(atPath: installedCLI.path) {
         try trash(installedCLI)
     }
     try FileManager.default.copyItem(at: builtCLI, to: installedCLI)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installedCLI.path)
     print("Installed CLI: \(installedCLI.path)")
+
+    let legacyCLI = installDirectory.appendingPathComponent("homeport")
+    if FileManager.default.fileExists(atPath: legacyCLI.path) {
+        try trash(legacyCLI)
+        print("Removed legacy CLI: \(legacyCLI.path)")
+    }
 
     if includeApp {
         let appPath = try buildAppBundle(repo: repo, channel: channel)
@@ -491,7 +497,7 @@ func start(_ arguments: [String]) throws {
     let appPath = try installedAppPath(arguments)
     let channel = try channel(from: arguments)
     guard FileManager.default.fileExists(atPath: appPath.path) else {
-        throw HomeportError.commandFailed("\(channel.appBundleName) was not found at \(appPath.path). Run homeport install --with-app first.")
+        throw HomeportError.commandFailed("\(channel.appBundleName) was not found at \(appPath.path). Run codex-multihome install --with-app first.")
     }
     try runProcess("open", [appPath.path])
     print("Started \(channel.appName): \(appPath.path)")
@@ -511,7 +517,7 @@ func autostart(_ arguments: [String]) throws {
         let appPath = try installedAppPath(arguments)
         let channel = try channel(from: arguments)
         guard FileManager.default.fileExists(atPath: appPath.path) else {
-            throw HomeportError.commandFailed("\(channel.appBundleName) was not found at \(appPath.path). Run homeport install --with-app first.")
+            throw HomeportError.commandFailed("\(channel.appBundleName) was not found at \(appPath.path). Run codex-multihome install --with-app first.")
         }
         try writeLaunchAgent(appPath: appPath, channel: channel)
         try runProcess("launchctl", ["unload", launchAgentPlist(channel: channel).path], allowFailure: true)
@@ -770,7 +776,7 @@ func uninstall(_ arguments: [String]) throws {
     let removeCLI = arguments.contains("--remove-cli")
     let removeState = arguments.contains("--remove-state")
     let removeManagedHomes = arguments.contains("--remove-managed-homes")
-    let cliPath = URL(fileURLWithPath: option(arguments, "--cli") ?? "\(NSHomeDirectory())/bin/homeport")
+    let cliPath = URL(fileURLWithPath: option(arguments, "--cli") ?? "\(NSHomeDirectory())/bin/codex-multihome")
 
     try autostart(["disable", "--channel", try channel(from: arguments).rawValue])
 
@@ -858,7 +864,7 @@ func writeLaunchAgent(appPath: URL, channel: HomeportChannel) throws {
       <key>ProgramArguments</key>
       <array>
         <string>/usr/bin/env</string>
-        <string>HOMEPORT_CHANNEL=\(channel.rawValue)</string>
+        <string>CODEX_MULTIHOME_CHANNEL=\(channel.rawValue)</string>
         <string>\(xmlEscape(executable.path))</string>
       </array>
       <key>RunAtLoad</key>
@@ -1177,9 +1183,9 @@ state. Multihome can open Codex Desktop, start terminal Codex sessions, clone yo
 setup, create temporary homes, and clean up temporary state after review.
 
 Usage:
-  homeport <command> [options]
-  homeport help <command>
-  homeport <command> --help
+  codex-multihome <command> [options]
+  codex-multihome help <command>
+  codex-multihome <command> --help
 
 Daily commands:
   launch       Open Codex using main, temporary, or named homes
@@ -1210,33 +1216,33 @@ Home commands:
   repair       Clear GUI-level CODEX_HOME override
 
 Examples:
-  homeport onboard
-  homeport launch main --target desktop
-  homeport launch temp --target terminal
-  homeport throwaway
-  homeport create --kind clean-room --name "Blank Slate"
-  homeport rename blank-slate --name "Scratch Lab"
-  homeport path scratch-lab --path ~/codex-homes/scratch-lab --move
-  homeport delete scratch-lab
-  homeport clone --preset working-setup --name "Plugin Lab"
-  homeport review
-  homeport doctor --repair
+  codex-multihome onboard
+  codex-multihome launch main --target desktop
+  codex-multihome launch temp --target terminal
+  codex-multihome throwaway
+  codex-multihome create --kind clean-room --name "Blank Slate"
+  codex-multihome rename blank-slate --name "Scratch Lab"
+  codex-multihome path scratch-lab --path ~/codex-homes/scratch-lab --move
+  codex-multihome delete scratch-lab
+  codex-multihome clone --preset working-setup --name "Plugin Lab"
+  codex-multihome review
+  codex-multihome doctor --repair
 
 Paths:
   Main Codex home:        ~/.codex
   Managed homes:          ~/.codex-homes/<slug>
   Multihome state:         ~/Library/Application Support/CodexMultihome/homeport.json
   Installed app default:  ~/Applications/Codex Multihome.app
-  Installed CLI default:  ~/bin/homeport
+  Installed CLI default:  ~/bin/codex-multihome
 """ }
 
 func doctorHelp() -> String { """
-homeport doctor
+codex-multihome doctor
 
 Diagnose the current Codex launch environment.
 
 Usage:
-  homeport doctor [--repair]
+  codex-multihome doctor [--repair]
 
 Options:
   --repair    Also clear GUI-level CODEX_HOME with launchctl unsetenv.
@@ -1249,17 +1255,17 @@ Checks:
   - Desktop launchers that still reference Deckhand/CodexHome
 
 Examples:
-  homeport doctor
-  homeport doctor --repair
+  codex-multihome doctor
+  codex-multihome doctor --repair
 """ }
 
 func launchHelp() -> String { """
-homeport launch
+codex-multihome launch
 
 Launch Codex with an explicit per-process CODEX_HOME.
 
 Usage:
-  homeport launch [main|temp|SLUG] --target desktop|terminal [options]
+  codex-multihome launch [main|temp|SLUG] --target desktop|terminal [options]
 
 Options:
   --target desktop|terminal     Launch Codex Desktop or a terminal Codex session.
@@ -1269,13 +1275,13 @@ Options:
 Selectors:
   main      Your normal ~/.codex home.
   temp      Create a temporary home and mark it for cleanup review.
-  SLUG      Launch a managed home shown by homeport list.
+  SLUG      Launch a managed home shown by codex-multihome list.
 
 Examples:
-  homeport launch main --target desktop
-  homeport launch main --target terminal --workspace ~/github.com/project
-  homeport launch temp --target terminal
-  homeport launch plugin-lab --target desktop
+  codex-multihome launch main --target desktop
+  codex-multihome launch main --target terminal --workspace ~/github.com/project
+  codex-multihome launch temp --target terminal
+  codex-multihome launch plugin-lab --target desktop
 
 Safety:
   Multihome sets CODEX_HOME only for the launched process. It does not call
@@ -1283,29 +1289,29 @@ Safety:
 """ }
 
 func throwawayHelp() -> String { """
-homeport throwaway
+codex-multihome throwaway
 
 Open a temporary Codex instance. By default this launches the desktop app with a
 new throwaway CODEX_HOME and app profile. The temporary home is registered for
 cleanup review so you can delete or promote it later.
 
 Usage:
-  homeport throwaway [--target desktop|terminal] [--workspace PATH] [--terminal terminal|iTerm]
+  codex-multihome throwaway [--target desktop|terminal] [--workspace PATH] [--terminal terminal|iTerm]
 
 Examples:
-  homeport throwaway
-  homeport throwaway --target terminal
-  homeport review
+  codex-multihome throwaway
+  codex-multihome throwaway --target terminal
+  codex-multihome review
 """ }
 
 func cloneHelp() -> String { """
-homeport clone
+codex-multihome clone
 
 Create a named managed Codex home. By default homes live under ~/.codex-homes;
 pass --path to choose a different CODEX_HOME destination.
 
 Usage:
-  homeport clone --preset working-setup|config-only|everything|empty --name NAME [--temporary] [--path PATH] [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
+  codex-multihome clone --preset working-setup|config-only|everything|empty --name NAME [--temporary] [--path PATH] [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
 
 Presets:
   working-setup   Config, auth, skills, plugins, MCP-related files; no sessions/logs.
@@ -1314,16 +1320,16 @@ Presets:
   empty           Empty managed home.
 
 Examples:
-  homeport clone --preset working-setup --name "Plugin Lab"
-  homeport clone --preset working-setup --name "Disposable Plugin Lab" --temporary
-  homeport clone --preset working-setup --name "Plugin Lab" --path ~/codex-homes/plugin-lab
-  homeport clone --preset config-only --name "No Auth Test"
-  homeport clone --preset empty --name "Blank Slate"
-  homeport clone --name "Skills Only" --include skills,plugins --exclude auth,memories,browser
-  homeport clone --name "Shared Skills" --source main --link-safe --include skills,plugins
-  homeport clone --name "Shared Auth" --source main --link-auth --include config,auth
-  homeport clone --name "Linked Config" --source main --include config,auth --link config
-  homeport clone --name "From Template" --source template-home --link-safe
+  codex-multihome clone --preset working-setup --name "Plugin Lab"
+  codex-multihome clone --preset working-setup --name "Disposable Plugin Lab" --temporary
+  codex-multihome clone --preset working-setup --name "Plugin Lab" --path ~/codex-homes/plugin-lab
+  codex-multihome clone --preset config-only --name "No Auth Test"
+  codex-multihome clone --preset empty --name "Blank Slate"
+  codex-multihome clone --name "Skills Only" --include skills,plugins --exclude auth,memories,browser
+  codex-multihome clone --name "Shared Skills" --source main --link-safe --include skills,plugins
+  codex-multihome clone --name "Shared Auth" --source main --link-auth --include config,auth
+  codex-multihome clone --name "Linked Config" --source main --include config,auth --link config
+  codex-multihome clone --name "From Template" --source template-home --link-safe
 
 Clone categories:
   config, auth, skills, plugins, agents, prompts, rules, profiles, memories,
@@ -1337,101 +1343,101 @@ Linking:
 """ }
 
 func createHelp() -> String { """
-homeport create
+codex-multihome create
 
 Create a managed Codex home.
 
 Usage:
-  homeport create --kind clean-room|temporary|clone [--name NAME] [--path PATH] [--preset PRESET] [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
+  codex-multihome create --kind clean-room|temporary|clone [--name NAME] [--path PATH] [--preset PRESET] [--source main|SLUG] [--include LIST] [--exclude LIST] [--link LIST|--link-safe|--link-auth]
 
 Examples:
-  homeport create --kind clean-room --name "Blank Slate"
-  homeport create --kind clean-room --name "Blank Slate" --path ~/codex-homes/blank-slate
-  homeport create --kind temporary --name "Throwaway UI"
-  homeport create --kind clone --preset config-only --name "Config Lab"
-  homeport create --kind clone --preset working-setup --name "Shared Auth" --link-auth
+  codex-multihome create --kind clean-room --name "Blank Slate"
+  codex-multihome create --kind clean-room --name "Blank Slate" --path ~/codex-homes/blank-slate
+  codex-multihome create --kind temporary --name "Throwaway UI"
+  codex-multihome create --kind clone --preset config-only --name "Config Lab"
+  codex-multihome create --kind clone --preset working-setup --name "Shared Auth" --link-auth
 """ }
 
 func renameHelp() -> String { """
-homeport rename
+codex-multihome rename
 
 Rename a managed home. The main ~/.codex home cannot be renamed. By default,
 only the display name and selector slug change; pass --move-folders to also
 rename the managed CODEX_HOME folder and matching app profile folder.
 
 Usage:
-  homeport rename SLUG --name NAME [--move-folders]
+  codex-multihome rename SLUG --name NAME [--move-folders]
 
 Examples:
-  homeport rename config-lab --name "Config Lab 2"
-  homeport rename old-lab --name "New Lab" --move-folders
+  codex-multihome rename config-lab --name "Config Lab 2"
+  codex-multihome rename old-lab --name "New Lab" --move-folders
 """ }
 
 func pathHelp() -> String { """
-homeport path
+codex-multihome path
 
 Change a saved home's CODEX_HOME path. The main ~/.codex home cannot be changed.
 By default, the new path must already be an existing directory. Pass --move to
 move the current home folder to a new path.
 
 Usage:
-  homeport path SLUG --path PATH [--move]
+  codex-multihome path SLUG --path PATH [--move]
 
 Examples:
-  homeport path config-lab --path ~/codex-homes/config-lab
-  homeport path config-lab --path ~/codex-homes/config-lab-2 --move
+  codex-multihome path config-lab --path ~/codex-homes/config-lab
+  codex-multihome path config-lab --path ~/codex-homes/config-lab-2 --move
 """ }
 
 func deleteHelp() -> String { """
-homeport delete
+codex-multihome delete
 
 Move a managed home and matching app profile to Trash. The main ~/.codex home
 cannot be deleted.
 
 Usage:
-  homeport delete SLUG
+  codex-multihome delete SLUG
 
 Examples:
-  homeport list
-  homeport delete config-lab
+  codex-multihome list
+  codex-multihome delete config-lab
 """ }
 
 func listHelp() -> String { """
-homeport list
+codex-multihome list
 
 Show registered homes and recent launch instances.
 
 Usage:
-  homeport list
+  codex-multihome list
 
 Examples:
-  homeport list
+  codex-multihome list
 """ }
 
 func reviewHelp() -> String { """
-homeport review
+codex-multihome review
 
 Show temporary homes that are waiting for cleanup review.
 
 Usage:
-  homeport review
+  codex-multihome review
 
 Next steps:
-  homeport cleanup INSTANCE_UUID
-  homeport promote INSTANCE_UUID --name "Saved Home"
+  codex-multihome cleanup INSTANCE_UUID
+  codex-multihome promote INSTANCE_UUID --name "Saved Home"
 """ }
 
 func cleanupHelp() -> String { """
-homeport cleanup
+codex-multihome cleanup
 
 Move a temporary managed home and its matching app profile to Trash after review.
 
 Usage:
-  homeport cleanup INSTANCE_UUID
+  codex-multihome cleanup INSTANCE_UUID
 
 Examples:
-  homeport review
-  homeport cleanup 00000000-0000-0000-0000-000000000000
+  codex-multihome review
+  codex-multihome cleanup 00000000-0000-0000-0000-000000000000
 
 Safety:
   Cleanup targets the temporary home/profile recorded for that instance. It never
@@ -1439,25 +1445,25 @@ Safety:
 """ }
 
 func promoteHelp() -> String { """
-homeport promote
+codex-multihome promote
 
 Keep a temporary home as a saved managed home.
 
 Usage:
-  homeport promote INSTANCE_UUID [--name NAME]
+  codex-multihome promote INSTANCE_UUID [--name NAME]
 
 Examples:
-  homeport promote 00000000-0000-0000-0000-000000000000
-  homeport promote 00000000-0000-0000-0000-000000000000 --name "Good Experiment"
+  codex-multihome promote 00000000-0000-0000-0000-000000000000
+  codex-multihome promote 00000000-0000-0000-0000-000000000000 --name "Good Experiment"
 """ }
 
 func repairHelp() -> String { """
-homeport repair
+codex-multihome repair
 
 Clear a GUI-level CODEX_HOME override.
 
 Usage:
-  homeport repair
+  codex-multihome repair
 
 Equivalent:
   launchctl unsetenv CODEX_HOME
@@ -1466,12 +1472,12 @@ This is useful after an old launcher poisoned future GUI Codex launches.
 """ }
 
 func installHelp() -> String { """
-homeport install
+codex-multihome install
 
 Build and install Multihome from a source checkout.
 
 Usage:
-  homeport install [--prefix PATH] [--with-app] [--app-dir PATH] [--repo PATH] [--channel live|dev]
+  codex-multihome install [--prefix PATH] [--with-app] [--app-dir PATH] [--repo PATH] [--channel live|dev]
 
 Options:
   --prefix PATH     CLI install directory. Default: ~/bin
@@ -1482,20 +1488,20 @@ Options:
                    App/state channel. Default: live.
 
 Examples:
-  homeport install
-  homeport install --with-app
-  homeport install --with-app --channel dev
-  homeport install --prefix ~/.local/bin --with-app --app-dir /Applications
+  codex-multihome install
+  codex-multihome install --with-app
+  codex-multihome install --with-app --channel dev
+  codex-multihome install --prefix ~/.local/bin --with-app --app-dir /Applications
 """ }
 
 func updateHelp() -> String { """
-homeport update
+codex-multihome update
 
 Fast-forward the source repo, reinstall Multihome, and restart the menu bar app
 when it is already installed and running.
 
 Usage:
-  homeport update [--prefix PATH] [--with-app] [--app-dir PATH] [--repo PATH] [--channel live|dev] [--no-pull]
+  codex-multihome update [--prefix PATH] [--with-app] [--app-dir PATH] [--repo PATH] [--channel live|dev] [--no-pull]
 
 Options:
   --with-app      Install the menu bar app. This is automatic when the app exists.
@@ -1505,79 +1511,79 @@ Options:
   --no-restart    Reinstall without restarting a running menu bar app.
 
 Examples:
-  homeport update
-  homeport update --with-app
-  homeport update --with-app --channel dev
-  homeport update --no-pull --with-app
+  codex-multihome update
+  codex-multihome update --with-app
+  codex-multihome update --with-app --channel dev
+  codex-multihome update --no-pull --with-app
 """ }
 
 func versionHelp() -> String { """
-homeport version
+codex-multihome version
 
 Show the installed Codex Multihome version.
 
 Usage:
-  homeport version
-  homeport --version
+  codex-multihome version
+  codex-multihome --version
 """ }
 
 func startHelp() -> String { """
-homeport start
+codex-multihome start
 
 Open the installed Codex Multihome menu bar app.
 
 Usage:
-  homeport start [--app-dir PATH] [--channel live|dev]
+  codex-multihome start [--app-dir PATH] [--channel live|dev]
 
 Examples:
-  homeport start
-  homeport start --channel dev
-  homeport start --app-dir ~/Applications
+  codex-multihome start
+  codex-multihome start --channel dev
+  codex-multihome start --app-dir ~/Applications
 """ }
 
 func restartHelp() -> String { """
-homeport restart
+codex-multihome restart
 
 Quit any running Codex Multihome menu bar process and reopen the installed app.
 Use this after reinstalling so macOS does not keep an older menu bar build alive.
 
 Usage:
-  homeport restart [--app-dir PATH] [--channel live|dev]
+  codex-multihome restart [--app-dir PATH] [--channel live|dev]
 
 Examples:
-  homeport restart
-  homeport restart --channel dev
-  homeport restart --app-dir ~/Applications
+  codex-multihome restart
+  codex-multihome restart --channel dev
+  codex-multihome restart --app-dir ~/Applications
 """ }
 
 func autostartHelp() -> String { """
-homeport autostart
+codex-multihome autostart
 
 Manage the user LaunchAgent that opens Codex Multihome at login.
 
 Usage:
-  homeport autostart enable [--app-dir PATH] [--channel live|dev]
-  homeport autostart disable [--channel live|dev]
-  homeport autostart status [--channel live|dev]
+  codex-multihome autostart enable [--app-dir PATH] [--channel live|dev]
+  codex-multihome autostart disable [--channel live|dev]
+  codex-multihome autostart status [--channel live|dev]
 
 Files:
   ~/Library/LaunchAgents/com.takhoffman.codex-multihome.plist
   ~/Library/LaunchAgents/com.takhoffman.codex-multihome.dev.plist
 
 Examples:
-  homeport autostart enable
-  homeport autostart enable --channel dev
-  homeport autostart status
-  homeport autostart disable
+  codex-multihome autostart enable
+  codex-multihome autostart enable --channel dev
+  codex-multihome autostart status
+  codex-multihome autostart disable
 """ }
 
 func configureHelp() -> String { """
-homeport configure
+codex-multihome configure
 
 Change Multihome preferences without reinstalling.
 
 Usage:
-  homeport configure [options]
+  codex-multihome configure [options]
 
 Options:
   --terminal terminal|iTerm             Preferred terminal for terminal launches.
@@ -1604,30 +1610,30 @@ Options:
   --show                                Print current configuration.
 
 Examples:
-  homeport configure --show
-  homeport configure --channel dev --show
-  homeport configure --terminal iTerm
-  homeport configure --workspace ~/github.com/Takhoffman/codex-multihome
-  homeport configure --launch-target terminal
-  homeport configure --clone-preset config-only
-  homeport configure --clone-include config,skills,plugins
-  homeport configure --clone-exclude auth,sessions
-  homeport configure --update-checks on --update-interval weekly
-  homeport configure --auto-install-updates off
-  homeport configure --allow-forbidden-computer-use-targets on
-  homeport configure --browser-use-local-testing on
-  homeport configure --reset
-  homeport configure --autostart on
+  codex-multihome configure --show
+  codex-multihome configure --channel dev --show
+  codex-multihome configure --terminal iTerm
+  codex-multihome configure --workspace ~/github.com/Takhoffman/codex-multihome
+  codex-multihome configure --launch-target terminal
+  codex-multihome configure --clone-preset config-only
+  codex-multihome configure --clone-include config,skills,plugins
+  codex-multihome configure --clone-exclude auth,sessions
+  codex-multihome configure --update-checks on --update-interval weekly
+  codex-multihome configure --auto-install-updates off
+  codex-multihome configure --allow-forbidden-computer-use-targets on
+  codex-multihome configure --browser-use-local-testing on
+  codex-multihome configure --reset
+  codex-multihome configure --autostart on
 """ }
 
 func onboardHelp() -> String { """
-homeport onboard
+codex-multihome onboard
 
 Friendly first-run setup: install CLI, install app, save preferences, enable
 autostart, and start the menu bar app.
 
 Usage:
-  homeport onboard [--prefix PATH] [--app-dir PATH] [--terminal terminal|iTerm] [--workspace PATH] [--repo PATH] [--allow-forbidden-computer-use-targets on|off]
+  codex-multihome onboard [--prefix PATH] [--app-dir PATH] [--terminal terminal|iTerm] [--workspace PATH] [--repo PATH] [--allow-forbidden-computer-use-targets on|off]
 
 Defaults:
   --prefix ~/bin
@@ -1636,31 +1642,31 @@ Defaults:
   --workspace current directory
 
 Examples:
-  homeport onboard
-  homeport onboard --terminal iTerm --workspace ~/github.com/Takhoffman/codex-multihome
+  codex-multihome onboard
+  codex-multihome onboard --terminal iTerm --workspace ~/github.com/Takhoffman/codex-multihome
 """ }
 
 func uninstallHelp() -> String { """
-homeport uninstall
+codex-multihome uninstall
 
 Remove the installed app and autostart entry. More complete removal is opt-in.
 
 Usage:
-  homeport uninstall [options]
+  codex-multihome uninstall [options]
 
 Options:
   --app-dir PATH              App install directory. Default: ~/Applications
   --remove-cli                Also remove the installed CLI.
-  --cli PATH                  CLI path to remove. Default: ~/bin/homeport
+  --cli PATH                  CLI path to remove. Default: ~/bin/codex-multihome
   --remove-state              Remove Multihome app state.
   --remove-managed-homes      Remove the channel managed homes directory.
   --channel live|dev          App/state channel. Default: live.
 
 Examples:
-  homeport uninstall
-  homeport uninstall --remove-cli --remove-state
-  homeport uninstall --remove-managed-homes
-  homeport uninstall --channel dev --remove-state
+  codex-multihome uninstall
+  codex-multihome uninstall --remove-cli --remove-state
+  codex-multihome uninstall --remove-managed-homes
+  codex-multihome uninstall --channel dev --remove-state
 
 Safety:
   Multihome never removes your main ~/.codex home. Managed homes are only removed
