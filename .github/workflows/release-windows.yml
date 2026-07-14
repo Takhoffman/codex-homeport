@@ -1,0 +1,33 @@
+name: Release Windows package
+
+on:
+  push:
+    tags:
+      - "windows-v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: packages/windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+      - name: Verify tag and package version
+        shell: pwsh
+        run: |
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^windows-v', ''
+          $packageVersion = node -p "require('./package.json').version"
+          if ($tagVersion -ne $packageVersion) { throw "Tag $tagVersion does not match package $packageVersion" }
+      - name: Release checks
+        run: npm run release:check
+      - name: Publish npm package
+        run: npm publish --access public --provenance

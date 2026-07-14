@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  macos:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -23,4 +23,23 @@ jobs:
       - name: Check help output
         run: .build/debug/codex-multihome --help
       - name: Check npm package
+        run: npm pack --dry-run
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: packages/windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build checks
+        run: npm run build
+      - name: Test Windows runtime
+        run: npm test
+      - name: Check help output
+        run: node .\codex-multihome.js --help
+      - name: Check Windows package
         run: npm pack --dry-run

@@ -1,0 +1,39 @@
+{
+  "name": "codex-multihome-windows",
+  "version": "0.15.0-windows.1",
+  "description": "Windows-native launcher and hygiene tool for isolated Codex homes.",
+  "author": "Tak Hoffman",
+  "license": "MIT",
+  "homepage": "https://github.com/Takhoffman/codex-multihome#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Takhoffman/codex-multihome.git",
+    "directory": "packages/windows"
+  },
+  "bugs": {
+    "url": "https://github.com/Takhoffman/codex-multihome/issues"
+  },
+  "keywords": ["codex", "windows", "launcher", "tray", "multihome"],
+  "bin": {
+    "codex-multihome": "codex-multihome.js"
+  },
+  "scripts": {
+    "build": "node build.js",
+    "test": "node --test test/*.test.js",
+    "release:check": "node release-check.js"
+  },
+  "files": [
+    "codex-multihome.js",
+    "codex-multihome-win.js",
+    "codex-multihome-tray.ps1",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["win32"],
+  "publishConfig": {
+    "access": "public"
+  }
+}
