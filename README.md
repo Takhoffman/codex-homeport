@@ -10,6 +10,10 @@ Codex Multihome is a macOS menu bar launcher and CLI for safely running multiple
 
 It can launch Codex as the desktop app or in a terminal session while setting `CODEX_HOME` only for that child process. It does not use `launchctl setenv CODEX_HOME`.
 
+An independently packaged Windows port lives in `packages/windows`. It uses a
+Node.js CLI and PowerShell/WPF tray app so Windows users do not download the
+macOS-only bundled runtimes. See [Windows documentation](docs/windows.md).
+
 ## What It Manages
 
 - Main Codex home: `~/.codex`
