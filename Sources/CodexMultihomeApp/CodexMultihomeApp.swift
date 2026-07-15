@@ -2244,6 +2244,7 @@ struct HomeportMenuView: View {
                             tabContent
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14)
                     .padding(.bottom, 12)
                 }
@@ -3830,6 +3831,7 @@ struct FocusedHomeView: View {
                 delete: delete
             )
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -3859,36 +3861,46 @@ struct ProxyCapturePanel: View {
                     model.launch(home.slug, target: .desktop, proxyEnabledOverride: true)
                 } label: {
                     Label("Proxy App", systemImage: "macwindow")
+                        .frame(maxWidth: .infinity)
                 }
                 Button {
                     model.launch(home.slug, target: .terminal, proxyEnabledOverride: true)
                 } label: {
                     Label("Proxy Term", systemImage: "terminal")
+                        .frame(maxWidth: .infinity)
                 }
-                Spacer(minLength: 4)
             }
-            HStack {
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8)
+            ], spacing: 8) {
                 Button {
                     model.openMITMWeb(for: home)
                 } label: {
                     Label("Open MITM Web", systemImage: "safari")
+                        .frame(maxWidth: .infinity)
                 }
                 Button {
                     model.copyMITMWebToken(for: home)
                 } label: {
                     Label("Copy Web Token", systemImage: "key.fill")
+                        .frame(maxWidth: .infinity)
                 }
                 Button {
                     model.copyMITMInspectionPrompt(for: home)
                 } label: {
                     Label("Copy agent prompt", systemImage: "doc.on.doc")
+                        .frame(maxWidth: .infinity)
                 }
                 Button(role: .destructive) {
                     model.stopMITMProxy(for: home)
                 } label: {
                     Label("Stop", systemImage: "stop.fill")
+                        .frame(maxWidth: .infinity)
                 }
-                Spacer()
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
