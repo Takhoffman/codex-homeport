@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
-const VERSION = "0.15.0-windows.1";
+const VERSION = "0.15.0";
 const COMMAND = "codex-multihome";
 const MAIN_HOME_ID = "00000000-0000-0000-0000-000000000001";
 
