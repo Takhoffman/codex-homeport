@@ -1,6 +1,6 @@
 {
   "name": "codex-multihome-windows",
-  "version": "0.15.0-windows.1",
+  "version": "0.15.0",
   "description": "Windows-native launcher and hygiene tool for isolated Codex homes.",
   "author": "Tak Hoffman",
   "license": "MIT",

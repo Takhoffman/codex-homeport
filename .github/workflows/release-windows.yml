@@ -30,9 +30,9 @@ jobs:
       - name: Release checks
         run: npm run release:check
       - name: Publish npm package
-        run: npm publish --access public --provenance
-      - name: Create GitHub prerelease
+        run: npm publish --access public --provenance --tag latest
+      - name: Create GitHub release
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" --prerelease --generate-notes --title "Codex Multihome Windows $env:GITHUB_REF_NAME"
+        run: gh release create "$env:GITHUB_REF_NAME" --notes-file "releases/$env:GITHUB_REF_NAME.md" --title "Codex Multihome Windows $env:GITHUB_REF_NAME"
