@@ -3,6 +3,7 @@
 Release notes live in `releases/` so GitHub releases and the package changelog
 can share the same source text.
 
+- [v0.15.2](releases/v0.15.2.md)
 - [Windows v0.15.0](releases/windows-v0.15.0.md)
 - [v0.15.1](releases/v0.15.1.md)
 - [Windows v0.15.0-windows.1](releases/windows-v0.15.0-windows.1.md)

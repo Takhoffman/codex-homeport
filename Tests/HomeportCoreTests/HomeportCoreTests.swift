@@ -477,6 +477,140 @@ final class HomeportCoreTests: XCTestCase {
         XCTAssertEqual(environment["OTHER"], "1")
     }
 
+    func testDetachedDesktopLaunchCarriesPerInstanceConfiguration() {
+        let arguments = detachedDesktopOpenArguments(
+            bundle: URL(fileURLWithPath: "/Applications/Codex.app"),
+            homePath: "/tmp/home port",
+            profilePath: "/tmp/profile path",
+            browserUseLocalTestingMode: true,
+            desktopAppDevFlavor: true,
+            proxyURL: "http://127.0.0.1:8080",
+            proxyCACertificatePath: "/tmp/mitm ca.pem",
+            environment: ["NO_PROXY": "example.com"]
+        )
+
+        XCTAssertEqual(Array(arguments.prefix(3)), ["-n", "-W", "/Applications/Codex.app"])
+        XCTAssertTrue(arguments.contains("CODEX_HOME=/tmp/home port"))
+        XCTAssertTrue(arguments.contains("BROWSER_USE_SECURITY_MODE=disabled-for-local-testing"))
+        XCTAssertTrue(arguments.contains("BUILD_FLAVOR=dev"))
+        XCTAssertTrue(arguments.contains("HTTPS_PROXY=http://127.0.0.1:8080"))
+        XCTAssertTrue(arguments.contains("NO_PROXY=example.com,127.0.0.1,localhost,::1"))
+        XCTAssertTrue(arguments.contains("SSL_CERT_FILE=/tmp/mitm ca.pem"))
+        XCTAssertTrue(arguments.contains("--args"))
+        XCTAssertTrue(arguments.contains("--user-data-dir=/tmp/profile path"))
+        XCTAssertTrue(arguments.contains("--proxy-server=http://127.0.0.1:8080"))
+    }
+
+    func testWaitingDesktopBrokerIsPersistentForNormalAndShimLaunches() {
+        let bundle = URL(fileURLWithPath: "/Applications/Codex Shim.app")
+        XCTAssertEqual(
+            waitingDesktopOpenArguments(bundle: bundle, freshLaunch: false, launchArguments: ["--env", "CODEX_HOME=/tmp/home"]),
+            ["-n", "-W", "/Applications/Codex Shim.app", "--env", "CODEX_HOME=/tmp/home"]
+        )
+        XCTAssertEqual(
+            waitingDesktopOpenArguments(bundle: bundle, freshLaunch: true, launchArguments: ["--args", "--user-data-dir=/tmp/profile"]),
+            ["-n", "-F", "-W", "/Applications/Codex Shim.app", "--args", "--user-data-dir=/tmp/profile"]
+        )
+    }
+
+    func testDesktopLaunchTimeoutRollsBackNormalAndShimTransactions() {
+        for freshLaunch in [false, true] {
+            let broker = FakeDesktopLaunchBroker(isRunning: true)
+            var discoveries = [[Int32(101)], [101, 201], [101, 201], [101, 201, 202]]
+            var terminated: [[Int32]] = []
+
+            XCTAssertThrowsError(
+                try transferDesktopLaunchOwnership(
+                    preexistingPIDs: [101],
+                    broker: broker,
+                    attempts: 1,
+                    cleanupAttempts: 2,
+                    discoverPIDs: { discoveries.removeFirst() },
+                    terminatePIDs: { terminated.append($0) },
+                    sleep: {}
+                ),
+                "freshLaunch=\(freshLaunch)"
+            ) { error in
+                XCTAssertEqual(error as? DesktopLaunchTransactionFailure, .timedOut)
+            }
+            XCTAssertEqual(terminated, [[201], [202]], "freshLaunch=\(freshLaunch)")
+            XCTAssertEqual(broker.terminateCallCount, 1, "freshLaunch=\(freshLaunch)")
+            XCTAssertEqual(broker.waitCallCount, 1, "freshLaunch=\(freshLaunch)")
+        }
+    }
+
+    func testDesktopLaunchEarlyBrokerExitRollsBackNormalAndShimTransactions() {
+        for freshLaunch in [false, true] {
+            let broker = FakeDesktopLaunchBroker(isRunning: false)
+            var discoveries = [[Int32(101), 201], [101, 201], [101, 201]]
+            var terminated: [[Int32]] = []
+
+            XCTAssertThrowsError(
+                try transferDesktopLaunchOwnership(
+                    preexistingPIDs: [101],
+                    broker: broker,
+                    attempts: 3,
+                    cleanupAttempts: 2,
+                    discoverPIDs: { discoveries.removeFirst() },
+                    terminatePIDs: { terminated.append($0) },
+                    sleep: {}
+                ),
+                "freshLaunch=\(freshLaunch)"
+            ) { error in
+                XCTAssertEqual(error as? DesktopLaunchTransactionFailure, .brokerExited)
+            }
+            XCTAssertEqual(terminated, [[201]], "freshLaunch=\(freshLaunch)")
+            XCTAssertEqual(broker.terminateCallCount, 0, "freshLaunch=\(freshLaunch)")
+            XCTAssertEqual(broker.waitCallCount, 1, "freshLaunch=\(freshLaunch)")
+        }
+    }
+
+    func testDesktopLaunchTransfersNormalAndShimOwnershipWithoutCleanup() throws {
+        for freshLaunch in [false, true] {
+            let broker = FakeDesktopLaunchBroker(isRunning: true)
+            var terminated: [[Int32]] = []
+
+            let pid = try transferDesktopLaunchOwnership(
+                preexistingPIDs: [101],
+                broker: broker,
+                attempts: 1,
+                cleanupAttempts: 2,
+                discoverPIDs: { [101, 201] },
+                terminatePIDs: { terminated.append($0) },
+                sleep: {}
+            )
+
+            XCTAssertEqual(pid, 201, "freshLaunch=\(freshLaunch)")
+            XCTAssertTrue(terminated.isEmpty, "freshLaunch=\(freshLaunch)")
+            XCTAssertEqual(broker.terminateCallCount, 0, "freshLaunch=\(freshLaunch)")
+            XCTAssertEqual(broker.waitCallCount, 0, "freshLaunch=\(freshLaunch)")
+            XCTAssertTrue(broker.isRunning, "freshLaunch=\(freshLaunch)")
+        }
+    }
+
+    func testDesktopLaunchCleanupNeverTerminatesPreexistingNormalOrShimInstances() {
+        for freshLaunch in [false, true] {
+            let broker = FakeDesktopLaunchBroker(isRunning: true)
+            var discoveries = [[Int32(101), 201], [101, 201], [101, 201, 202]]
+            var terminated: [[Int32]] = []
+
+            XCTAssertThrowsError(
+                try transferDesktopLaunchOwnership(
+                    preexistingPIDs: [101],
+                    broker: broker,
+                    attempts: 0,
+                    cleanupAttempts: 2,
+                    discoverPIDs: { discoveries.removeFirst() },
+                    terminatePIDs: { terminated.append($0) },
+                    sleep: {}
+                ),
+                "freshLaunch=\(freshLaunch)"
+            )
+            XCTAssertEqual(terminated, [[201], [202]], "freshLaunch=\(freshLaunch)")
+            XCTAssertFalse(terminated.flatMap { $0 }.contains(101), "freshLaunch=\(freshLaunch)")
+        }
+    }
+
     func testBrowserUseLocalTestingModeUpdatesNodeReplConfig() throws {
         let root = try makeTempRoot()
         let home = root.appendingPathComponent(".codex", isDirectory: true)
@@ -565,6 +699,7 @@ final class HomeportCoreTests: XCTestCase {
           101 /Applications/Codex Shim.app/Contents/Frameworks/Codex Helper.app/Contents/MacOS/Codex Helper --user-data-dir=/tmp/profile-shim
           202 /Applications/Codex Shim.app/Contents/MacOS/Codex --user-data-dir=/tmp/other-profile-shim
           303 /Applications/Codex Shim.app/Contents/MacOS/ChatGPT --user-data-dir=/tmp/profile-shim
+          404 /Applications/Codex Shim.app/Contents/MacOS/ChatGPT --user-data-dir=/tmp/profile-shim
         """
 
         XCTAssertEqual(
@@ -574,6 +709,14 @@ final class HomeportCoreTests: XCTestCase {
                 profilePath: "/tmp/profile-shim"
             ),
             303
+        )
+        XCTAssertEqual(
+            launcher.desktopProcessPIDs(
+                processListing: listing,
+                bundlePath: "/Applications/Codex Shim.app",
+                profilePath: "/tmp/profile-shim"
+            ),
+            [303, 404]
         )
     }
 
@@ -1406,5 +1549,25 @@ final class HomeportCoreTests: XCTestCase {
             return URL(fileURLWithPath: target)
         }
         return url.deletingLastPathComponent().appendingPathComponent(target)
+    }
+}
+
+private final class FakeDesktopLaunchBroker: DesktopLaunchBroker {
+    private(set) var isRunning: Bool
+    private(set) var terminateCallCount = 0
+    private(set) var waitCallCount = 0
+
+    init(isRunning: Bool) {
+        self.isRunning = isRunning
+    }
+
+    func terminate() {
+        terminateCallCount += 1
+        isRunning = false
+    }
+
+    func waitUntilExit() {
+        waitCallCount += 1
+        isRunning = false
     }
 }

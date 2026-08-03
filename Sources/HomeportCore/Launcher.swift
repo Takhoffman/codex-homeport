@@ -1,6 +1,78 @@
 import AppKit
 import Foundation
 
+protocol DesktopLaunchBroker: AnyObject {
+    var isRunning: Bool { get }
+    func terminate()
+    func waitUntilExit()
+}
+
+extension Process: DesktopLaunchBroker {}
+
+enum DesktopLaunchTransactionFailure: Error, Equatable {
+    case brokerExited
+    case timedOut
+}
+
+/// Keeps a desktop launch all-or-nothing until a newly created Codex process
+/// can be distinguished from every instance that existed before the launch.
+func transferDesktopLaunchOwnership(
+    preexistingPIDs: Set<Int32>,
+    broker: any DesktopLaunchBroker,
+    attempts: Int,
+    cleanupAttempts: Int,
+    discoverPIDs: () -> [Int32],
+    terminatePIDs: ([Int32]) -> Void,
+    sleep: () -> Void
+) throws -> Int32 {
+    func newlyLaunchedPIDs() -> [Int32] {
+        discoverPIDs()
+            .filter { !preexistingPIDs.contains($0) }
+            .sorted()
+    }
+
+    func rollback() {
+        // Signal anything already visible before stopping the broker, then scan
+        // again after it has exited to catch a process that appeared during the
+        // timeout/exit race. Never include a PID present before this launch.
+        var terminatedPIDs = Set<Int32>()
+        func terminateNewlyDiscoveredPIDs() {
+            let targets = newlyLaunchedPIDs().filter { !terminatedPIDs.contains($0) }
+            guard !targets.isEmpty else { return }
+            terminatePIDs(targets)
+            terminatedPIDs.formUnion(targets)
+        }
+
+        terminateNewlyDiscoveredPIDs()
+        if broker.isRunning {
+            broker.terminate()
+        }
+        broker.waitUntilExit()
+        // LaunchServices can finish handing off a process just after `open`
+        // exits. Keep scanning for the same bounded window used for discovery.
+        for attempt in 0..<max(cleanupAttempts, 1) {
+            terminateNewlyDiscoveredPIDs()
+            if attempt + 1 < cleanupAttempts {
+                sleep()
+            }
+        }
+    }
+
+    for _ in 0..<attempts {
+        guard broker.isRunning else {
+            rollback()
+            throw DesktopLaunchTransactionFailure.brokerExited
+        }
+        if let pid = newlyLaunchedPIDs().first {
+            return pid
+        }
+        sleep()
+    }
+
+    rollback()
+    throw DesktopLaunchTransactionFailure.timedOut
+}
+
 public struct Launcher {
     private let paths: HomeportPaths
     private let fileManager: FileManager
@@ -69,11 +141,6 @@ public struct Launcher {
             try fileManager.createDirectory(at: URL(fileURLWithPath: profilePath), withIntermediateDirectories: true)
         }
 
-        var arguments: [String] = []
-        if let profilePath = home.profilePath {
-            arguments = ["--user-data-dir=\(profilePath)"]
-        }
-        if let proxyURL { arguments.append("--proxy-server=\(proxyURL)") }
         if appBundle != nil, let profilePath = home.profilePath {
             let shimProfilePath = "\(profilePath)-shim"
             try fileManager.createDirectory(at: URL(fileURLWithPath: shimProfilePath), withIntermediateDirectories: true)
@@ -104,22 +171,66 @@ public struct Launcher {
                 proxyCACertificatePath: proxyCACertificatePath
             )
         }
-        var environment = ProcessInfo.processInfo.environment
-        environment["CODEX_HOME"] = home.homePath
-        applyBrowserUseLocalTestingMode(browserUseLocalTestingMode, to: &environment)
-        applyDesktopAppDevFlavor(desktopAppDevFlavor, to: &environment)
-        applyProxy(proxyURL: proxyURL, caCertificatePath: proxyCACertificatePath, to: &environment)
-
-        let app = try NSWorkspace.shared.launchApplication(
-            at: bundle,
-            options: [.newInstance, .async],
-            configuration: [
-                .arguments: arguments,
-                .environment: environment
-            ]
+        return try launchDetachedDesktopBundle(
+            bundle: bundle,
+            home: home,
+            profilePath: home.profilePath,
+            browserUseLocalTestingMode: browserUseLocalTestingMode,
+            desktopAppDevFlavor: desktopAppDevFlavor,
+            proxyURL: proxyURL,
+            proxyCACertificatePath: proxyCACertificatePath
         )
-        app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-        return app.processIdentifier
+    }
+
+    /// Launch through a waiting `open` broker instead of making Multihome the
+    /// LaunchServices owner. `-n` permits a separate Electron instance and `-W`
+    /// keeps the broker alive if Multihome exits, so LaunchServices does not
+    /// close the launched Codex instance with its original owner.
+    private func launchDetachedDesktopBundle(
+        bundle: URL,
+        home: CodexHome,
+        profilePath: String?,
+        browserUseLocalTestingMode: Bool,
+        desktopAppDevFlavor: Bool,
+        proxyURL: String?,
+        proxyCACertificatePath: String?
+    ) throws -> Int32? {
+        guard let profilePath else {
+            throw HomeportError.commandFailed("Codex Desktop launch requires an isolated profile path.")
+        }
+        let existingPIDs = Set(findCodexProcesses(bundlePath: bundle.path, profilePath: profilePath))
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = detachedDesktopOpenArguments(
+            bundle: bundle,
+            homePath: home.homePath,
+            profilePath: profilePath,
+            browserUseLocalTestingMode: browserUseLocalTestingMode,
+            desktopAppDevFlavor: desktopAppDevFlavor,
+            proxyURL: proxyURL,
+            proxyCACertificatePath: proxyCACertificatePath
+        )
+        try process.run()
+        let pid: Int32
+        do {
+            pid = try transferDesktopLaunchOwnership(
+                preexistingPIDs: existingPIDs,
+                broker: process,
+                attempts: 20,
+                cleanupAttempts: 20,
+                discoverPIDs: { findCodexProcesses(bundlePath: bundle.path, profilePath: profilePath) },
+                terminatePIDs: terminateCodexProcesses,
+                sleep: { Thread.sleep(forTimeInterval: 0.15) }
+            )
+        } catch DesktopLaunchTransactionFailure.brokerExited {
+            throw HomeportError.commandFailed("Codex Desktop exited during launch from \(bundle.path).")
+        } catch DesktopLaunchTransactionFailure.timedOut {
+            throw HomeportError.commandFailed("Codex Desktop launch did not produce a running process from \(bundle.path).")
+        }
+        NSRunningApplication(processIdentifier: pid)?.activate(
+            options: [.activateAllWindows, .activateIgnoringOtherApps]
+        )
+        return pid
     }
 
     private func launchCustomDesktopBundle(
@@ -130,36 +241,59 @@ public struct Launcher {
         proxyURL: String?,
         proxyCACertificatePath: String?
     ) throws -> Int32? {
-        var arguments = ["-n", "-F", bundle.path, "--env", "CODEX_HOME=\(home.homePath)"]
-        arguments += shimBrowserCompatibleDesktopEnvironmentArguments(environment: ProcessInfo.processInfo.environment)
+        var launchArguments = ["--env", "CODEX_HOME=\(home.homePath)"]
+        launchArguments += shimBrowserCompatibleDesktopEnvironmentArguments(environment: ProcessInfo.processInfo.environment)
         if browserUseLocalTestingMode {
-            arguments += ["--env", "BROWSER_USE_SECURITY_MODE=disabled-for-local-testing"]
+            launchArguments += ["--env", "BROWSER_USE_SECURITY_MODE=disabled-for-local-testing"]
         }
         if let proxyURL {
-            arguments += ["--env", "HTTPS_PROXY=\(proxyURL)", "--env", "HTTP_PROXY=\(proxyURL)"]
+            launchArguments += ["--env", "HTTPS_PROXY=\(proxyURL)", "--env", "HTTP_PROXY=\(proxyURL)"]
         }
         if let proxyCACertificatePath, !proxyCACertificatePath.isEmpty {
-            arguments += ["--env", "SSL_CERT_FILE=\(proxyCACertificatePath)", "--env", "NODE_EXTRA_CA_CERTS=\(proxyCACertificatePath)"]
+            launchArguments += ["--env", "SSL_CERT_FILE=\(proxyCACertificatePath)", "--env", "NODE_EXTRA_CA_CERTS=\(proxyCACertificatePath)"]
         }
-        arguments += ["--args", "--user-data-dir=\(profilePath)"]
-        if let proxyURL { arguments.append("--proxy-server=\(proxyURL)") }
+        launchArguments += ["--args", "--user-data-dir=\(profilePath)"]
+        if let proxyURL { launchArguments.append("--proxy-server=\(proxyURL)") }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = arguments
+        process.arguments = waitingDesktopOpenArguments(
+            bundle: bundle,
+            freshLaunch: true,
+            launchArguments: launchArguments
+        )
+        let existingPIDs = Set(findCodexProcesses(bundlePath: bundle.path, profilePath: profilePath))
         try process.run()
-        process.waitUntilExit()
-        if process.terminationStatus != 0 {
-            throw HomeportError.commandFailed("Custom Codex app launch failed with exit code \(process.terminationStatus).")
-        }
 
-        for _ in 0..<20 {
-            if let pid = findCodexProcess(bundlePath: bundle.path, profilePath: profilePath) {
-                return pid
-            }
-            Thread.sleep(forTimeInterval: 0.15)
+        do {
+            return try transferDesktopLaunchOwnership(
+                preexistingPIDs: existingPIDs,
+                broker: process,
+                attempts: 20,
+                cleanupAttempts: 20,
+                discoverPIDs: { findCodexProcesses(bundlePath: bundle.path, profilePath: profilePath) },
+                terminatePIDs: terminateCodexProcesses,
+                sleep: { Thread.sleep(forTimeInterval: 0.15) }
+            )
+        } catch DesktopLaunchTransactionFailure.brokerExited {
+            throw HomeportError.commandFailed("Custom Codex app exited during launch from \(bundle.path).")
+        } catch DesktopLaunchTransactionFailure.timedOut {
+            throw HomeportError.commandFailed("Custom Codex app launch did not produce a running process from \(bundle.path).")
         }
-        throw HomeportError.commandFailed("Custom Codex app launch did not produce a running process from \(bundle.path).")
+    }
+
+    private func terminateCodexProcesses(_ pids: [Int32]) {
+        let targets = Array(Set(pids.filter { $0 > 0 })).sorted()
+        guard !targets.isEmpty else { return }
+        for pid in targets {
+            kill(pid, SIGTERM)
+        }
+        for _ in 0..<20 {
+            if targets.allSatisfy({ kill($0, 0) != 0 && errno == ESRCH }) {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
     }
 
     private func terminateCodexProcesses(usingProfilePath profilePath: String) {
@@ -193,6 +327,10 @@ public struct Launcher {
     }
 
     private func findCodexProcess(bundlePath: String, profilePath: String) -> Int32? {
+        findCodexProcesses(bundlePath: bundlePath, profilePath: profilePath).first
+    }
+
+    private func findCodexProcesses(bundlePath: String, profilePath: String) -> [Int32] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
         process.arguments = ["-axo", "pid=,args="]
@@ -201,14 +339,14 @@ public struct Launcher {
         do {
             try process.run()
         } catch {
-            return nil
+            return []
         }
 
         // Drain before waiting: ps output can exceed the pipe buffer, which deadlocks waitUntilExit.
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        guard let output = String(data: data, encoding: .utf8) else { return nil }
-        return existingCustomDesktopProcessPID(
+        guard let output = String(data: data, encoding: .utf8) else { return [] }
+        return desktopProcessPIDs(
             processListing: output,
             bundlePath: bundlePath,
             profilePath: profilePath
@@ -220,6 +358,19 @@ public struct Launcher {
         bundlePath: String,
         profilePath: String
     ) -> Int32? {
+        desktopProcessPIDs(
+            processListing: processListing,
+            bundlePath: bundlePath,
+            profilePath: profilePath
+        ).first
+    }
+
+    func desktopProcessPIDs(
+        processListing: String,
+        bundlePath: String,
+        profilePath: String
+    ) -> [Int32] {
+        var matches: [Int32] = []
         for line in processListing.split(separator: "\n", omittingEmptySubsequences: true) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard let space = trimmed.firstIndex(where: { $0 == " " || $0 == "\t" }) else { continue }
@@ -229,9 +380,9 @@ public struct Launcher {
             // Match the bundle's main executable directory instead of assuming "Codex".
             guard args.contains("\(bundlePath)/Contents/MacOS/") else { continue }
             guard args.contains("--user-data-dir=\(profilePath)") else { continue }
-            return pid
+            matches.append(pid)
         }
-        return nil
+        return matches
     }
 
     private func launchTerminal(
@@ -300,6 +451,64 @@ public struct Launcher {
             """
         }
     }
+}
+
+func detachedDesktopOpenArguments(
+    bundle: URL,
+    homePath: String,
+    profilePath: String?,
+    browserUseLocalTestingMode: Bool = false,
+    desktopAppDevFlavor: Bool = false,
+    proxyURL: String? = nil,
+    proxyCACertificatePath: String? = nil,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> [String] {
+    var launchArguments = ["--env", "CODEX_HOME=\(homePath)"]
+    if browserUseLocalTestingMode {
+        launchArguments += ["--env", "BROWSER_USE_SECURITY_MODE=disabled-for-local-testing"]
+    }
+    if desktopAppDevFlavor {
+        launchArguments += ["--env", "BUILD_FLAVOR=dev"]
+    }
+    if let proxyURL, !proxyURL.isEmpty {
+        for key in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] {
+            launchArguments += ["--env", "\(key)=\(proxyURL)"]
+        }
+        launchArguments += ["--env", "NO_PROXY=\(mergedNoProxy(environment["NO_PROXY"]))"]
+        launchArguments += ["--env", "no_proxy=\(mergedNoProxy(environment["no_proxy"]))"]
+        if let proxyCACertificatePath, !proxyCACertificatePath.isEmpty {
+            launchArguments += ["--env", "SSL_CERT_FILE=\(proxyCACertificatePath)"]
+            launchArguments += ["--env", "NODE_EXTRA_CA_CERTS=\(proxyCACertificatePath)"]
+        }
+    }
+    var appArguments: [String] = []
+    if let profilePath {
+        appArguments.append("--user-data-dir=\(profilePath)")
+    }
+    if let proxyURL, !proxyURL.isEmpty {
+        appArguments.append("--proxy-server=\(proxyURL)")
+    }
+    if !appArguments.isEmpty {
+        launchArguments.append("--args")
+        launchArguments += appArguments
+    }
+    return waitingDesktopOpenArguments(
+        bundle: bundle,
+        freshLaunch: false,
+        launchArguments: launchArguments
+    )
+}
+
+func waitingDesktopOpenArguments(
+    bundle: URL,
+    freshLaunch: Bool,
+    launchArguments: [String]
+) -> [String] {
+    var arguments = ["-n"]
+    if freshLaunch { arguments.append("-F") }
+    arguments += ["-W", bundle.path]
+    arguments += launchArguments
+    return arguments
 }
 
 func applyProxy(proxyURL: String?, caCertificatePath: String?, to environment: inout [String: String]) {
